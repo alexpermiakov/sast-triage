@@ -1,4 +1,4 @@
-name: triage
+name: Triage
 
 # The triage pipeline, exercised daily on a deliberately vulnerable target:
 # materialize one more vulnerability class into demo/vulnerable-app (as committed
@@ -104,3 +104,4 @@ jobs:
             demo-findings.sarif
             demo-report.md
           retention-days: 7
+
