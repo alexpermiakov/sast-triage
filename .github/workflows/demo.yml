@@ -74,13 +74,22 @@ jobs:
           git add demo/vulnerable-app demo/triage-cache.json
           git commit -m "demo(triage): $(date -u +%Y-%m-%d) vulnerability + verdict [skip ci]"
           git push -f origin "$BRANCH"
-          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" = "0" ]; then
-            gh pr create \
-              --head "$BRANCH" \
-              --title "Demo triage: $(date -u +%Y-%m-%d)" \
-              --body-file demo-report.md
-          else
-            gh pr edit "$BRANCH" --body-file demo-report.md
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
+            gh pr edit "$BRANCH" --body-file demo-report.md || true
+            exit 0
+          fi
+          # Cache + vuln already committed and pushed; if the run can't open the
+          # PR (repo blocks Actions from creating PRs), surface it, don't fail.
+          if ! gh pr create \
+            --head "$BRANCH" \
+            --title "Demo triage: $(date -u +%Y-%m-%d)" \
+            --body-file demo-report.md; then
+            echo "::warning::Could not open the demo PR. Enable Settings → Actions → General → 'Allow GitHub Actions to create and approve pull requests' (or use a PAT / GitHub App token)."
+            {
+              echo "### Demo PR not opened automatically"
+              echo "Vuln + verdict committed to \`$BRANCH\`, but the run lacks PR-create permission."
+              echo "Open it: https://github.com/${{ github.repository }}/compare/$BRANCH?expand=1"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload artifacts
