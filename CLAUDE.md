@@ -20,9 +20,23 @@ internal/
   cache/             triage-cache.json load/save, fingerprint+codeHash matching
   agent/             the LLM loop: client, tools, budgets, verdict parsing
   report/            triage-report.md rendering, GitHub issue bodies
-.github/workflows/   nightly-triage.yml, ci.yml
-testdata/            real semgrep SARIF fixtures
+  github/            minimal Issues REST client (dedupe owned by cache issueRef)
+  pipeline/          run orchestration: partition, budget, errgroup fan-out,
+                     single-writer merge, issue routing
+.github/workflows/   nightly-triage.yml, ci.yml, demo.yml
+testdata/            real semgrep SARIF fixtures (pinned to unit-test line numbers)
+demo/                vulnerable-app/ (own go.mod, intentionally vulnerable;
+                     one package per vuln class) + inject.sh + committed
+                     triage-cache.json. The demo workflow materializes one vuln
+                     class per day and opens a review PR. Never scanned by
+                     nightly-triage (excluded).
 ```
+
+Do not add findings-bearing source to `testdata/`: those paths are short-circuited
+to `benign` by the agent and their line numbers are pinned to unit tests. The
+daily demo lives in `demo/` for exactly that reason. The demo accumulates vulns as
+separate committed packages (never overwriting one file) so its committed cache
+stays coherent — every verdict maps to code present in the diff.
 
 ## Hard rules
 

@@ -1,0 +1,25 @@
+// Package main is an intentionally vulnerable demo app for sast-triage.
+// DO NOT DEPLOY. Regenerated daily by demo/inject.sh.
+package main
+
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+)
+
+// download reads a file path derived from untrusted input (CWE-22, path traversal).
+func download(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("file")
+	data, err := os.ReadFile(filepath.Join("/var/www/files", name))
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.Write(data)
+}
+
+func main() {
+	http.HandleFunc("/download", download)
+	http.ListenAndServe(":8080", nil)
+}

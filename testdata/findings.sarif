@@ -1,0 +1,188 @@
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Semgrep OSS",
+          "semanticVersion": "1.86.0",
+          "rules": [
+            {
+              "id": "go.lang.security.audit.database.string-formatted-query.string-formatted-query",
+              "name": "string-formatted-query",
+              "shortDescription": {
+                "text": "Semgrep Finding: go.lang.security.audit.database.string-formatted-query.string-formatted-query"
+              },
+              "fullDescription": {
+                "text": "String-formatted SQL query detected. This could lead to SQL injection if variables in the SQL statement are not properly sanitized. Use parameterized queries instead."
+              },
+              "defaultConfiguration": { "level": "error" },
+              "help": {
+                "text": "Use parameterized queries or prepared statements instead of string formatting.",
+                "markdown": "Use parameterized queries or prepared statements instead of string formatting."
+              },
+              "properties": {
+                "precision": "very-high",
+                "security-severity": "8.6",
+                "tags": [
+                  "CWE-89: Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')",
+                  "OWASP-A03:2021 - Injection",
+                  "security"
+                ]
+              }
+            },
+            {
+              "id": "generic.secrets.security.detected-hardcoded-password.detected-hardcoded-password",
+              "name": "detected-hardcoded-password",
+              "shortDescription": {
+                "text": "Semgrep Finding: generic.secrets.security.detected-hardcoded-password.detected-hardcoded-password"
+              },
+              "fullDescription": {
+                "text": "Hardcoded password detected. Storing credentials in source code risks credential leakage and complicates rotation. Load secrets from the environment or a secret manager."
+              },
+              "defaultConfiguration": { "level": "warning" },
+              "help": {
+                "text": "Load secrets from the environment or a secret manager.",
+                "markdown": "Load secrets from the environment or a secret manager."
+              },
+              "properties": {
+                "precision": "high",
+                "security-severity": "7.5",
+                "tags": [
+                  "CWE-798: Use of Hard-coded Credentials",
+                  "OWASP-A07:2021 - Identification and Authentication Failures",
+                  "security",
+                  "secrets"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "generic.secrets.security.detected-hardcoded-password.detected-hardcoded-password",
+          "level": "warning",
+          "message": {
+            "text": "Hardcoded password detected. Storing credentials in source code risks credential leakage and complicates rotation."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/config.go", "uriBaseId": "%SRCROOT%" },
+                "region": {
+                  "startLine": 7,
+                  "startColumn": 2,
+                  "endLine": 7,
+                  "endColumn": 40,
+                  "snippet": { "text": "\tdbPassword = \"hunter2-prod-password\"" }
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "matchBasedId/v1": "1f2e3d4c5b6a798887969594a3b2c1d0e1f2a3b4c5d6e7f80918273645546372_0"
+          }
+        },
+        {
+          "ruleId": "go.lang.security.audit.database.string-formatted-query.string-formatted-query",
+          "level": "error",
+          "message": {
+            "text": "String-formatted SQL query detected. This could lead to SQL injection if variables in the SQL statement are not properly sanitized. Use parameterized queries instead."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/handlers.go", "uriBaseId": "%SRCROOT%" },
+                "region": {
+                  "startLine": 17,
+                  "startColumn": 2,
+                  "endLine": 17,
+                  "endColumn": 74,
+                  "snippet": { "text": "\tquery := fmt.Sprintf(\"SELECT name, email FROM users WHERE id = %s\", id)" }
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "matchBasedId/v1": "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9_0"
+          },
+          "codeFlows": [
+            {
+              "threadFlows": [
+                {
+                  "locations": [
+                    {
+                      "location": {
+                        "message": { "text": "source: user-controlled query parameter" },
+                        "physicalLocation": {
+                          "artifactLocation": { "uri": "app/handlers.go", "uriBaseId": "%SRCROOT%" },
+                          "region": {
+                            "startLine": 16,
+                            "endLine": 16,
+                            "snippet": { "text": "\tid := r.URL.Query().Get(\"id\")" }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "location": {
+                        "message": { "text": "propagator: tainted value formatted into query string" },
+                        "physicalLocation": {
+                          "artifactLocation": { "uri": "app/handlers.go", "uriBaseId": "%SRCROOT%" },
+                          "region": {
+                            "startLine": 17,
+                            "endLine": 17,
+                            "snippet": { "text": "\tquery := fmt.Sprintf(\"SELECT name, email FROM users WHERE id = %s\", id)" }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "location": {
+                        "message": { "text": "sink: query executed against the database" },
+                        "physicalLocation": {
+                          "artifactLocation": { "uri": "app/handlers.go", "uriBaseId": "%SRCROOT%" },
+                          "region": {
+                            "startLine": 18,
+                            "endLine": 18,
+                            "snippet": { "text": "\trow := s.db.QueryRow(query)" }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "ruleId": "go.lang.security.audit.database.string-formatted-query.string-formatted-query",
+          "level": "error",
+          "message": {
+            "text": "String-formatted SQL query detected. This could lead to SQL injection if variables in the SQL statement are not properly sanitized. Use parameterized queries instead."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "app/handlers_test.go", "uriBaseId": "%SRCROOT%" },
+                "region": {
+                  "startLine": 7,
+                  "startColumn": 2,
+                  "endLine": 7,
+                  "endColumn": 42,
+                  "snippet": { "text": "\tq := buildQuery(\"42; DROP TABLE users\")" }
+                }
+              }
+            }
+          ],
+          "fingerprints": {
+            "matchBasedId/v1": "9d8c7b6a5f4e3d2c1b0a99887766554433221100ffeeddccbbaa998877665544_0"
+          }
+        }
+      ]
+    }
+  ]
+}

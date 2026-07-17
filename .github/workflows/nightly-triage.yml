@@ -1,0 +1,91 @@
+name: nightly-triage
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch: {} # bootstrap / manual runs
+
+# Never run two triages at once: overlapping runs would race on the cache.
+concurrency:
+  group: nightly-triage
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the triage branch
+      issues: write # file exploitable findings
+      pull-requests: write # open the cache PR
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      - name: Build sast-triage
+        run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
+
+      - name: Install semgrep
+        run: pipx install semgrep==1.86.0 # bump deliberately; keep in sync with testdata fixtures
+
+      # Exclude the demo app (it has its own daily workflow) and testdata
+      # fixtures so this run stays focused on the tool's own code.
+      - name: Scan
+        run: semgrep scan --config auto --sarif --dataflow-traces --exclude demo --exclude testdata --output findings.sarif
+
+      - name: Triage
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # unreachable from fork context
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          sast-triage \
+            -sarif findings.sarif \
+            -cache triage-cache.json \
+            -repo . \
+            -report triage-report.md \
+            -create-issues \
+            -github-repo "${{ github.repository }}" \
+            -link-base "https://github.com/${{ github.repository }}/blob/${{ github.sha }}"
+
+      # Findings and report stay in artifacts, not logs (public-repo posture).
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: triage-${{ github.run_id }}
+          path: |
+            findings.sarif
+            triage-report.md
+          retention-days: 7
+
+      # For branch protection to require human approval on triage PRs, swap
+      # github.token for a GitHub App installation token here — approval is
+      # then enforced by mechanism, not policy.
+      - name: Open cache PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain -- triage-cache.json)" ]; then
+            echo "cache unchanged; no PR"
+            exit 0
+          fi
+          BRANCH="triage/nightly-$(date -u +%Y%m%d)"
+          git config user.name "sast-triage-bot"
+          git config user.email "sast-triage-bot@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add triage-cache.json
+          git commit -m "chore(triage): nightly verdict cache update [skip ci]"
+          git push -f origin "$BRANCH"
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" = "0" ]; then
+            gh pr create \
+              --head "$BRANCH" \
+              --title "Nightly SAST triage: verdict cache update $(date -u +%Y-%m-%d)" \
+              --body-file triage-report.md
+          else
+            gh pr edit "$BRANCH" --body-file triage-report.md
+          fi

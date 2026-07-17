@@ -1,0 +1,76 @@
+package agent
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
+)
+
+// AnthropicClient is the production Client backed by the Anthropic API.
+type AnthropicClient struct {
+	client anthropic.Client
+}
+
+func NewAnthropicClient(apiKey string) *AnthropicClient {
+	return &AnthropicClient{client: anthropic.NewClient(option.WithAPIKey(apiKey))}
+}
+
+func (a *AnthropicClient) Complete(ctx context.Context, req Request) (*Response, error) {
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(req.Model),
+		MaxTokens: int64(req.MaxTokens),
+		System:    []anthropic.TextBlockParam{{Text: req.System}},
+	}
+	for _, m := range req.Messages {
+		params.Messages = append(params.Messages, toMessageParam(m))
+	}
+	for _, t := range req.Tools {
+		params.Tools = append(params.Tools, anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
+			Name:        t.Name,
+			Description: anthropic.String(t.Description),
+			InputSchema: anthropic.ToolInputSchemaParam{Properties: t.Properties, Required: t.Required},
+		}})
+	}
+
+	msg, err := a.client.Messages.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic messages.create: %w", err)
+	}
+
+	resp := &Response{
+		StopReason:   string(msg.StopReason),
+		InputTokens:  int(msg.Usage.InputTokens),
+		OutputTokens: int(msg.Usage.OutputTokens),
+	}
+	for _, b := range msg.Content {
+		switch b.Type {
+		case "text":
+			resp.Content = append(resp.Content, Block{Type: "text", Text: b.Text})
+		case "tool_use":
+			resp.Content = append(resp.Content, Block{Type: "tool_use", ID: b.ID, Name: b.Name, Input: b.Input})
+		}
+	}
+	return resp, nil
+}
+
+func toMessageParam(m Message) anthropic.MessageParam {
+	var blocks []anthropic.ContentBlockParamUnion
+	for _, b := range m.Content {
+		switch b.Type {
+		case "text":
+			blocks = append(blocks, anthropic.NewTextBlock(b.Text))
+		case "tool_use":
+			blocks = append(blocks, anthropic.ContentBlockParamUnion{OfToolUse: &anthropic.ToolUseBlockParam{
+				ID: b.ID, Name: b.Name, Input: b.Input,
+			}})
+		case "tool_result":
+			blocks = append(blocks, anthropic.NewToolResultBlock(b.ToolUseID, b.Text, b.IsError))
+		}
+	}
+	if m.Role == "assistant" {
+		return anthropic.NewAssistantMessage(blocks...)
+	}
+	return anthropic.NewUserMessage(blocks...)
+}

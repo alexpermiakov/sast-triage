@@ -1,0 +1,266 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"path"
+	"strings"
+
+	"github.com/alexpermiakov/sast-triage/internal/cache"
+	"github.com/alexpermiakov/sast-triage/internal/sarif"
+)
+
+const (
+	VerdictBenign      = "benign"
+	VerdictExploitable = "exploitable"
+	VerdictUncertain   = "uncertain"
+)
+
+// Verdict is the agent's decision about one finding.
+type Verdict struct {
+	Verdict  string   `json:"verdict"`
+	Reason   string   `json:"reason"`
+	Evidence []string `json:"evidence"`
+
+	TokensUsed   int  `json:"-"`
+	ShortCircuit bool `json:"-"` // decided by pure rule, no LLM call
+}
+
+// Config bounds the loop. Zero values fall back to the listed defaults.
+type Config struct {
+	Model            string
+	MaxIterations    int // default 10
+	TokenBudget      int // per finding, input+output; default 60000
+	MaxTokensPerCall int // default 4096
+}
+
+// Triager runs one bounded loop per finding.
+type Triager struct {
+	client Client
+	exec   *ToolExecutor
+	root   string
+	cfg    Config
+}
+
+func New(client Client, repoRoot string, cfg Config) (*Triager, error) {
+	exec, err := NewToolExecutor(repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.MaxIterations <= 0 {
+		cfg.MaxIterations = 10
+	}
+	if cfg.TokenBudget <= 0 {
+		cfg.TokenBudget = 60000
+	}
+	if cfg.MaxTokensPerCall <= 0 {
+		cfg.MaxTokensPerCall = 4096
+	}
+	return &Triager{client: client, exec: exec, root: repoRoot, cfg: cfg}, nil
+}
+
+// TriageFinding decides one finding. It returns an error only on transport
+// failure (the caller reports those as uncertain but must not cache them);
+// every in-loop failure mode — budget exhaustion, malformed verdicts, rejected
+// tool calls — resolves to a verdict, fail-closed to "uncertain".
+func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, error) {
+	if v, ok := ShortCircuit(f); ok {
+		return v, nil
+	}
+
+	tools := toolDefs()
+	maxIter := t.cfg.MaxIterations
+	prompt := buildTriagePrompt(f)
+	if isContextFree(f) {
+		// The evidence is the snippet itself: one call, no tools.
+		tools, maxIter, prompt = nil, 1, contextFreePrompt(f)
+	}
+
+	msgs := []Message{{Role: "user", Content: []Block{{Type: "text", Text: prompt}}}}
+	tokens := 0
+	retried := false
+
+	for i := 0; i < maxIter; i++ {
+		resp, err := t.client.Complete(ctx, Request{
+			Model:     t.cfg.Model,
+			System:    systemPrompt,
+			Messages:  msgs,
+			Tools:     tools,
+			MaxTokens: t.cfg.MaxTokensPerCall,
+		})
+		if err != nil {
+			return Verdict{}, fmt.Errorf("triage finding %s: %w", f.Fingerprint, err)
+		}
+		tokens += resp.InputTokens + resp.OutputTokens
+		if tokens > t.cfg.TokenBudget {
+			return t.uncertain(f, tokens, fmt.Sprintf("token budget exhausted (%d used, %d allowed)", tokens, t.cfg.TokenBudget)), nil
+		}
+
+		if calls := toolCalls(resp); len(calls) > 0 {
+			msgs = append(msgs, Message{Role: "assistant", Content: resp.Content})
+			var results []Block
+			for _, c := range calls {
+				out, err := t.exec.Execute(c.Name, c.Input)
+				if err != nil {
+					results = append(results, Block{Type: "tool_result", ToolUseID: c.ID, Text: err.Error(), IsError: true})
+					continue
+				}
+				results = append(results, Block{Type: "tool_result", ToolUseID: c.ID, Text: out})
+			}
+			msgs = append(msgs, Message{Role: "user", Content: results})
+			continue
+		}
+
+		text := responseText(resp)
+		v, perr := parseVerdict(text)
+		if perr != nil {
+			if retried {
+				return t.uncertain(f, tokens, "model did not produce a parseable verdict after retry"), nil
+			}
+			retried = true
+			msgs = append(msgs,
+				Message{Role: "assistant", Content: []Block{{Type: "text", Text: text}}},
+				Message{Role: "user", Content: []Block{{Type: "text", Text: "That was not a valid verdict. Reply with ONLY the JSON object: " +
+					`{"verdict": "benign|exploitable|uncertain", "reason": "...", "evidence": ["path:line"]}`}}},
+			)
+			continue
+		}
+		v.TokensUsed = tokens
+		return t.validate(v, f), nil
+	}
+
+	return t.uncertain(f, tokens, fmt.Sprintf("iteration cap (%d) reached without a verdict", maxIter)), nil
+}
+
+// FlaggedRegion is the region the finding points at, used for codeHash.
+func FlaggedRegion(f sarif.Finding) cache.Region {
+	return cache.Region{File: f.File, Start: f.StartLine, End: f.EndLine}
+}
+
+// ShortCircuit handles findings decidable by pure rule, without the LLM:
+// code in test or fixture paths is not production attack surface.
+func ShortCircuit(f sarif.Finding) (Verdict, bool) {
+	if !isTestPath(f.File) {
+		return Verdict{}, false
+	}
+	return Verdict{
+		Verdict:      VerdictBenign,
+		Reason:       fmt.Sprintf("flagged code is in test/fixture path %s, which is not part of the production attack surface", f.File),
+		Evidence:     []string{FlaggedRegion(f).Ref()},
+		ShortCircuit: true,
+	}, true
+}
+
+func isTestPath(file string) bool {
+	if strings.Contains(path.Base(file), "_test.") {
+		return true
+	}
+	for _, seg := range strings.Split(path.Dir(file), "/") {
+		switch seg {
+		case "testdata", "test", "tests", "__tests__", "fixtures":
+			return true
+		}
+	}
+	return false
+}
+
+// isContextFree reports rules whose evidence is the snippet itself, e.g.
+// hardcoded credentials — no data flow to trace.
+func isContextFree(f sarif.Finding) bool {
+	probe := strings.ToLower(f.RuleID + " " + strings.Join(f.Tags, " "))
+	for _, kw := range []string{"hardcoded", "hard-coded", "secret", "credential"} {
+		if strings.Contains(probe, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// validate enforces the asymmetric evidence bar. benign with missing or
+// unverifiable evidence downgrades to uncertain; exploitable and uncertain
+// merely have unverifiable refs dropped (they must not poison the codeHash).
+func (t *Triager) validate(v Verdict, f sarif.Finding) Verdict {
+	switch v.Verdict {
+	case VerdictBenign, VerdictExploitable, VerdictUncertain:
+	default:
+		return t.uncertain(f, v.TokensUsed, fmt.Sprintf("model returned unknown verdict %q", v.Verdict))
+	}
+
+	var valid, invalid []string
+	for _, ref := range v.Evidence {
+		if t.checkRef(ref) {
+			valid = append(valid, ref)
+		} else {
+			invalid = append(invalid, ref)
+		}
+	}
+
+	if v.Verdict == VerdictBenign {
+		if len(invalid) > 0 {
+			return t.uncertain(f, v.TokensUsed, fmt.Sprintf("benign verdict cited unverifiable evidence %v — evidence bar not met", invalid))
+		}
+		if len(valid) == 0 {
+			return t.uncertain(f, v.TokensUsed, "benign verdict cited no evidence — evidence bar not met")
+		}
+	}
+	v.Evidence = valid
+	return v
+}
+
+// checkRef verifies an evidence ref parses and points at readable lines
+// inside the repo.
+func (t *Triager) checkRef(ref string) bool {
+	r, err := cache.ParseRef(ref)
+	if err != nil {
+		return false
+	}
+	_, err = cache.CodeHash(t.root, r, nil)
+	return err == nil
+}
+
+func (t *Triager) uncertain(f sarif.Finding, tokens int, reason string) Verdict {
+	return Verdict{
+		Verdict:    VerdictUncertain,
+		Reason:     reason,
+		TokensUsed: tokens,
+	}
+}
+
+func toolCalls(resp *Response) []Block {
+	var calls []Block
+	for _, b := range resp.Content {
+		if b.Type == "tool_use" {
+			calls = append(calls, b)
+		}
+	}
+	return calls
+}
+
+func responseText(resp *Response) string {
+	var parts []string
+	for _, b := range resp.Content {
+		if b.Type == "text" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+// parseVerdict extracts the verdict JSON object from model text, tolerating
+// code fences and surrounding prose.
+func parseVerdict(text string) (Verdict, error) {
+	start := strings.Index(text, "{")
+	end := strings.LastIndex(text, "}")
+	if start < 0 || end <= start {
+		return Verdict{}, fmt.Errorf("no JSON object in response")
+	}
+	var v Verdict
+	if err := json.Unmarshal([]byte(text[start:end+1]), &v); err != nil {
+		return Verdict{}, fmt.Errorf("parse verdict: %w", err)
+	}
+	if v.Verdict == "" {
+		return Verdict{}, fmt.Errorf("verdict JSON missing \"verdict\" field")
+	}
+	return v, nil
+}

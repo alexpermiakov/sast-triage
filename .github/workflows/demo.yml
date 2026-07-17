@@ -1,0 +1,92 @@
+name: demo
+
+# Proof-of-life: each day materialize one more vulnerability class into
+# demo/vulnerable-app (as committed code), triage the whole app against a
+# permanent, committed cache, and open a PR so the verdicts can be reviewed and
+# approved — the same review flow as nightly-triage, on a deliberately
+# vulnerable target. Over five days the cache fills in; after that runs are
+# no-ops (everything is a cache hit) until you add or change a vuln.
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch: {}
+
+# Never run two demo triages at once: they'd race on demo/triage-cache.json.
+concurrency:
+  group: demo-triage
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  demo-triage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the demo branch
+      pull-requests: write # open the review PR
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      - name: Build sast-triage
+        run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
+
+      - name: Materialize today's vulnerability
+        run: ./demo/inject.sh
+
+      - name: Install semgrep
+        run: pipx install semgrep==1.86.0
+
+      - name: Scan the demo app
+        run: semgrep scan --config auto --sarif --dataflow-traces --output demo-findings.sarif demo/vulnerable-app
+
+      # Permanent cache, committed to demo/triage-cache.json. -repo . matches
+      # semgrep's cwd-relative paths (demo/vulnerable-app/<pkg>/main.go).
+      - name: Triage
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          sast-triage \
+            -sarif demo-findings.sarif \
+            -repo . \
+            -cache demo/triage-cache.json \
+            -report demo-report.md
+
+      - name: Open review PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain -- demo/vulnerable-app demo/triage-cache.json)" ]; then
+            echo "cache already covers today's rotation; nothing new to review"
+            exit 0
+          fi
+          BRANCH="demo/triage-$(date -u +%Y%m%d)"
+          git config user.name "sast-triage-bot"
+          git config user.email "sast-triage-bot@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add demo/vulnerable-app demo/triage-cache.json
+          git commit -m "demo(triage): $(date -u +%Y-%m-%d) vulnerability + verdict [skip ci]"
+          git push -f origin "$BRANCH"
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" = "0" ]; then
+            gh pr create \
+              --head "$BRANCH" \
+              --title "Demo triage: $(date -u +%Y-%m-%d)" \
+              --body-file demo-report.md
+          else
+            gh pr edit "$BRANCH" --body-file demo-report.md
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: demo-triage-${{ github.run_id }}
+          path: |
+            demo-findings.sarif
+            demo-report.md
+          retention-days: 7
