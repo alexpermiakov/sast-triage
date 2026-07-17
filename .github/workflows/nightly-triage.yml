@@ -31,7 +31,9 @@ jobs:
         run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
 
       - name: Install semgrep
-        run: pipx install semgrep==1.86.0 # bump deliberately; keep in sync with testdata fixtures
+        run: |
+          pipx install semgrep==1.86.0 # bump deliberately; keep in sync with testdata fixtures
+          pipx inject semgrep setuptools # semgrep imports pkg_resources; Python 3.12 venvs don't ship setuptools
 
       # Exclude the demo app (it has its own daily workflow) and testdata
       # fixtures so this run stays focused on the tool's own code.

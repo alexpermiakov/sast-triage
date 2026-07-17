@@ -40,7 +40,9 @@ jobs:
         run: ./demo/inject.sh
 
       - name: Install semgrep
-        run: pipx install semgrep==1.86.0
+        run: |
+          pipx install semgrep==1.86.0
+          pipx inject semgrep setuptools # semgrep imports pkg_resources; Python 3.12 venvs don't ship setuptools
 
       - name: Scan the demo app
         run: semgrep scan --config auto --sarif --dataflow-traces --output demo-findings.sarif demo/vulnerable-app
