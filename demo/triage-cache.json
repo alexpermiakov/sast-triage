@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "entries": {
+    "1a7215b5bd18732c726ab98aa43e77305c30022ebb78dab3155423ba5d9efe531c4c011694b9d666682f05e075838499d8688520a8ac58839ebc24d16c05d4c0_0": {
+      "ruleId": "go.lang.security.injection.tainted-url-host.tainted-url-host",
+      "file": "demo/vulnerable-app/ssrf/main.go",
+      "verdict": "exploitable",
+      "reason": "The HTTP handler fetch (registered at /fetch) reads the attacker-controlled query parameter 'url' via r.URL.Query().Get(\"url\") into 'target' (main.go:12), then passes it unmodified to http.Get(target) (main.go:13). There is no validation, allowlist, scheme/host check, or any other sanitization between the source and the sink, and the handler is reachable directly via the registered route in main() (main.go:23). This is a classic unauthenticated SSRF: an attacker can make the server issue arbitrary outbound HTTP requests (e.g., to internal/metadata endpoints) and the response body is streamed back to the client via io.Copy(w, resp.Body) (main.go:19), enabling data exfiltration.",
+      "evidence": [
+        "demo/vulnerable-app/ssrf/main.go:11-13",
+        "demo/vulnerable-app/ssrf/main.go:19",
+        "demo/vulnerable-app/ssrf/main.go:22-24"
+      ],
+      "codeHash": "sha256:8ec8e9d00c524de935f3b34901e7ee7a92bf945b28046c9dc78ffb410ac7b19d",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-17T19:03:40Z",
+      "tokensUsed": 8003
+    },
+    "f68f31f7a921dd1b812e13c52e8c6df0fdd1e6b73dfe1f899aa85af16100b334fea59fb571d34ff23d2a068baf5b15db4f545c1009daa9451406134f26f65d2b_0": {
+      "ruleId": "go.lang.security.audit.net.use-tls.use-tls",
+      "file": "demo/vulnerable-app/ssrf/main.go",
+      "verdict": "exploitable",
+      "reason": "The server is started with http.ListenAndServe(\":8080\", nil) at demo/vulnerable-app/ssrf/main.go:24, with no TLS configuration anywhere in the file (no tls.Config, no ListenAndServeTLS, no reverse proxy/TLS termination visible in this package). All traffic to the /fetch handler, including the SSRF target URL parameter, is served in plaintext over port 8080, matching the rule's definition of cleartext transmission (CWE-319). There is no sanitization or wrapping that adds TLS, so the flagged sink is reachable exactly as written.",
+      "evidence": [
+        "demo/vulnerable-app/ssrf/main.go:22-25"
+      ],
+      "codeHash": "sha256:6383cf6ac32e78426d72be26089083e00a410aa8b02c9d2d7e19bd07bf4a4937",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-17T19:03:41Z",
+      "tokensUsed": 6821
+    }
+  }
+}
