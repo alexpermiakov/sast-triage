@@ -127,15 +127,17 @@ The first run on an existing codebase converts the whole backlog into
 evidence-backed verdicts — review that PR once, closely. Every run after is
 incremental: cache hits dominate and LLM cost drops ~99%.
 
-## Run nightly in GitHub Actions
+## Triaging your own repository
 
-Add the two secrets first: repo **Settings → Secrets and variables → Actions →
-New repository secret** → `ANTHROPIC_API_KEY`. (`GITHUB_TOKEN` is provided by
-Actions automatically.)
+This repo runs a single [`triage` workflow](.github/workflows/triage.yml) against the
+bundled demo app (see [Proof of life](#proof-of-life-a-self-triaging-demo) below). To
+triage your **own** code nightly, adapt the template below — it scans your source
+instead of the demo app.
 
-Then add `.github/workflows/nightly-triage.yml` to the target repo — this
-repo's [own workflow](.github/workflows/nightly-triage.yml) is the reference;
-a minimal version:
+Add the secret first: **Settings → Secrets and variables → Actions → New repository
+secret** → `ANTHROPIC_API_KEY` (`GITHUB_TOKEN` is provided automatically), and enable
+**Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to
+create and approve pull requests"** so the run can open the PR.
 
 ```yaml
 name: nightly-triage
@@ -165,8 +167,13 @@ jobs:
           go-version: stable
 
       - run: go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
-      - run: pipx install semgrep==1.86.0
-      - run: semgrep scan --config auto --sarif --dataflow-traces --output findings.sarif
+      # semgrep from its official image, pinned by digest (avoids the
+      # pipx/pkg_resources breakage on Python 3.12 runners).
+      - name: Scan
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
+            semgrep scan --config auto --sarif --dataflow-traces --output findings.sarif
 
       - name: Triage
         env:
@@ -204,7 +211,7 @@ PRs mandatory rather than customary, use a GitHub App token instead of
 
 `demo/vulnerable-app/` is a deliberately vulnerable Go app (**do not deploy it**),
 kept in its own Go module so it never touches the main build or tests. The
-[`demo` workflow](.github/workflows/demo.yml) runs daily and demonstrates the whole
+[`triage` workflow](.github/workflows/triage.yml) runs daily and demonstrates the whole
 lifecycle on a vulnerable target:
 
 - **It accumulates.** `demo/inject.sh` materializes one vulnerability class per day
@@ -212,16 +219,16 @@ lifecycle on a vulnerable target:
   package. Findings land as committed code, not by overwriting a single file.
 - **The cache is permanent and reviewable.** Triage runs against a committed
   `demo/triage-cache.json`, and each run opens a `demo/triage-YYYYMMDD` **PR** so you
-  review and approve the verdicts — the same review flow as nightly, on a target
-  where the answers are known. Because the vuln code and its verdict travel together
-  in the diff, every cache entry maps to code that's actually present.
+  review and approve the verdicts, on a target where the answers are known. Because
+  the vuln code and its verdict travel together in the diff, every cache entry maps
+  to code that's actually present.
 - **Then it goes quiet.** After ~5 days every class is present and cached; further
   runs are all cache hits, change nothing, and open no PR — until you add or edit a
   vuln. That's the bootstrap → incremental → steady-state story in miniature.
 
-The demo needs the same `ANTHROPIC_API_KEY` secret. The real
-[nightly-triage workflow](.github/workflows/nightly-triage.yml) excludes `demo/`
-(and `testdata/`) so it stays focused on the tool's own code.
+The workflow needs the `ANTHROPIC_API_KEY` secret. It scans only
+`demo/vulnerable-app`; `testdata/` holds the frozen unit-test fixtures (pinned to
+test assertions, auto-short-circuited to benign) and is never scanned.
 
 Preview a run locally:
 

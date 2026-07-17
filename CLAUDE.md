@@ -23,13 +23,12 @@ internal/
   github/            minimal Issues REST client (dedupe owned by cache issueRef)
   pipeline/          run orchestration: partition, budget, errgroup fan-out,
                      single-writer merge, issue routing
-.github/workflows/   nightly-triage.yml, ci.yml, demo.yml
+.github/workflows/   ci.yml (lint+test on PRs), triage.yml (daily triage of demo/)
 testdata/            real semgrep SARIF fixtures (pinned to unit-test line numbers)
 demo/                vulnerable-app/ (own go.mod, intentionally vulnerable;
                      one package per vuln class) + inject.sh + committed
-                     triage-cache.json. The demo workflow materializes one vuln
-                     class per day and opens a review PR. Never scanned by
-                     nightly-triage (excluded).
+                     triage-cache.json. triage.yml materializes one vuln class per
+                     day, triages demo/vulnerable-app, and opens a review PR.
 ```
 
 Do not add findings-bearing source to `testdata/`: those paths are short-circuited
