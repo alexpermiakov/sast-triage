@@ -36,7 +36,9 @@ go.work.sum
 /findings.sarif
 /triage-report.md
 
-# demo run artifacts (the vuln packages + demo/triage-cache.json ARE committed)
+# demo run artifacts — the vulnerable app (demo/vulnerable-app/main.go) is committed
+# by hand; these are transient and never committed.
 /demo-findings.sarif
 /demo-report.md
+/demo/triage-cache.json
 /demo/vulnerable-app/vulnerable-demo

@@ -1,22 +1,14 @@
 name: Triage
 
-# The triage pipeline, exercised daily on a deliberately vulnerable target:
-# materialize one more vulnerability class into demo/vulnerable-app (as committed
-# code), triage the whole app against a permanent, committed cache, and open a PR
-# so the verdicts can be reviewed and approved. Over five days the cache fills in;
-# after that runs are no-ops (everything is a cache hit) until a vuln changes.
-# (To triage a real repository instead, scan your own code and drop the inject
-# step — see the README.)
+# Runs sast-triage against demo/vulnerable-app (a small, fixed, deliberately
+# vulnerable app) and publishes the triage report to the run summary + an
+# artifact. Nothing is committed. To triage a real repository instead, scan your
+# own code and point -repo at the checkout — see the README.
 
 on:
   schedule:
     - cron: "0 1 * * *"
   workflow_dispatch: {}
-
-# Never run two triages at once: they'd race on demo/triage-cache.json.
-concurrency:
-  group: triage
-  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -24,9 +16,6 @@ permissions:
 jobs:
   triage:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # push the triage branch
-      pull-requests: write # open the review PR
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -37,9 +26,6 @@ jobs:
       - name: Build sast-triage
         run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
 
-      - name: Materialize today's vulnerability
-        run: ./demo/inject.sh
-
       # semgrep from its official image, pinned by digest (= v1.86.0). Avoids the
       # pipx/pkg_resources breakage on Python 3.12 runners.
       - name: Scan the demo app
@@ -48,8 +34,8 @@ jobs:
             semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
             semgrep scan --config auto --sarif --dataflow-traces --output demo-findings.sarif demo/vulnerable-app
 
-      # Permanent cache, committed to demo/triage-cache.json. -repo . matches
-      # semgrep's cwd-relative paths (demo/vulnerable-app/<pkg>/main.go).
+      # Throwaway cache (RUNNER_TEMP): nothing is committed, so each run
+      # re-triages the fixed app fresh. -repo . matches semgrep's cwd-relative paths.
       - name: Triage
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -57,51 +43,22 @@ jobs:
           sast-triage \
             -sarif demo-findings.sarif \
             -repo . \
-            -cache demo/triage-cache.json \
+            -cache "$RUNNER_TEMP/triage-cache.json" \
             -report demo-report.md
 
-      - name: Open review PR
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Publish report to run summary
+        if: always()
         run: |
-          if [ -z "$(git status --porcelain -- demo/vulnerable-app demo/triage-cache.json)" ]; then
-            echo "cache already covers today's rotation; nothing new to review"
-            exit 0
-          fi
-          # Guard against committing a vuln with no verdict (e.g. semgrep missed
-          # it): only open a PR once there's at least one triaged finding.
-          if [ "$(jq '.entries | length' demo/triage-cache.json 2>/dev/null || echo 0)" -eq 0 ]; then
-            echo "no verdicts produced; no PR"
-            exit 0
-          fi
-          BRANCH="demo/triage-$(date -u +%Y%m%d)"
-          git config user.name "sast-triage-bot"
-          git config user.email "sast-triage-bot@users.noreply.github.com"
-          git checkout -B "$BRANCH"
-          git add demo/vulnerable-app demo/triage-cache.json
-          git commit -m "demo(triage): $(date -u +%Y-%m-%d) vulnerability + verdict [skip ci]"
-          git push -f origin "$BRANCH"
-          # A new vuln/verdict is present — a PR is required. Update the existing
-          # one, or open it; if opening fails, fail the job (loud).
-          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
-            gh pr edit "$BRANCH" --body-file demo-report.md
-            exit 0
-          fi
-          if ! gh pr create \
-            --head "$BRANCH" \
-            --title "Demo triage: $(date -u +%Y-%m-%d)" \
-            --body-file demo-report.md; then
-            echo "::error::Demo triage produced a finding but the PR could not be opened. Enable Settings → Actions → General → Workflow permissions → 'Allow GitHub Actions to create and approve pull requests'."
-            exit 1
+          if [ -f demo-report.md ]; then
+            cat demo-report.md >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: demo-triage-${{ github.run_id }}
+          name: triage-${{ github.run_id }}
           path: |
             demo-findings.sarif
             demo-report.md
           retention-days: 7
-

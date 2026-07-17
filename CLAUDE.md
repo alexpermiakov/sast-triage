@@ -25,17 +25,14 @@ internal/
                      single-writer merge, issue routing
 .github/workflows/   ci.yml (lint+test on PRs), triage.yml (daily triage of demo/)
 testdata/            real semgrep SARIF fixtures (pinned to unit-test line numbers)
-demo/                vulnerable-app/ (own go.mod, intentionally vulnerable;
-                     one package per vuln class) + inject.sh + committed
-                     triage-cache.json. triage.yml materializes one vuln class per
-                     day, triages demo/vulnerable-app, and opens a review PR.
+demo/                vulnerable-app/ (own go.mod; fixed, hand-written, intentionally
+                     vulnerable main.go). triage.yml scans + triages it and publishes
+                     the report as an artifact — nothing is committed or generated.
 ```
 
 Do not add findings-bearing source to `testdata/`: those paths are short-circuited
-to `benign` by the agent and their line numbers are pinned to unit tests. The
-daily demo lives in `demo/` for exactly that reason. The demo accumulates vulns as
-separate committed packages (never overwriting one file) so its committed cache
-stays coherent — every verdict maps to code present in the diff.
+to `benign` by the agent and their line numbers are pinned to unit tests. The demo's
+vulnerable app lives in `demo/` (outside `testdata/`) for exactly that reason.
 
 ## Hard rules
 

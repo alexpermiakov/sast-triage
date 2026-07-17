@@ -209,36 +209,32 @@ PRs mandatory rather than customary, use a GitHub App token instead of
 
 ## Proof of life: a self-triaging demo
 
-`demo/vulnerable-app/` is a deliberately vulnerable Go app (**do not deploy it**),
-kept in its own Go module so it never touches the main build or tests. The
-[`triage` workflow](.github/workflows/triage.yml) runs daily and demonstrates the whole
-lifecycle on a vulnerable target:
+`demo/vulnerable-app/` is a small, fixed, deliberately vulnerable Go app (**do not
+deploy it**), kept in its own Go module so it never touches the main build or tests.
+Its `main.go` has a handful of real bugs on purpose — SQL injection (with a taint
+trace), command injection, SSRF, and a hardcoded credential — so a triage run always
+has something to find.
 
-- **It accumulates.** `demo/inject.sh` materializes one vulnerability class per day
-  (SQL injection, command injection, SSRF, path traversal, weak crypto) into its own
-  package. Findings land as committed code, not by overwriting a single file.
-- **The cache is permanent and reviewable.** Triage runs against a committed
-  `demo/triage-cache.json`, and each run opens a `demo/triage-YYYYMMDD` **PR** so you
-  review and approve the verdicts, on a target where the answers are known. Because
-  the vuln code and its verdict travel together in the diff, every cache entry maps
-  to code that's actually present.
-- **Then it goes quiet.** After ~5 days every class is present and cached; further
-  runs are all cache hits, change nothing, and open no PR — until you add or edit a
-  vuln. That's the bootstrap → incremental → steady-state story in miniature.
+The [`triage` workflow](.github/workflows/triage.yml) runs it end to end: scan the app
+with semgrep, triage the findings with the bounded agent, and publish the report to the
+run summary and a build artifact. It's a fixed target, so nothing is generated and
+**nothing is committed** — the app is checked in by hand and the workflow only reads it.
+Expect the agent to trace the query parameter into the SQL sink and call it
+`exploitable`, decide the hardcoded credential from the snippet alone, and cite
+`file:line` evidence for each.
 
-The workflow needs the `ANTHROPIC_API_KEY` secret. It scans only
-`demo/vulnerable-app`; `testdata/` holds the frozen unit-test fixtures (pinned to
-test assertions, auto-short-circuited to benign) and is never scanned.
+The workflow needs the `ANTHROPIC_API_KEY` secret. It scans only `demo/vulnerable-app`;
+`testdata/` holds the frozen unit-test fixtures (pinned to test assertions,
+auto-short-circuited to benign) and is never scanned.
 
 Preview a run locally:
 
 ```bash
-./demo/inject.sh   # materializes today's vuln package under demo/vulnerable-app/
 semgrep scan --config auto --sarif --dataflow-traces --output demo.sarif demo/vulnerable-app
 
 set -a; source .env; set +a
-sast-triage -sarif demo.sarif -repo . -cache demo/triage-cache.json -report demo-report.md
-cat demo-report.md            # then review the git diff of demo/triage-cache.json
+sast-triage -sarif demo.sarif -repo . -cache /tmp/triage-cache.json -report demo-report.md
+cat demo-report.md
 ```
 
 ## Development
