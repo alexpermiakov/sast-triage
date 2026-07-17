@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "entries": {
+    "0f481f3146eb068b9eae0a69cb0c548df7a142e1fb168056d571885b77aa61146c5c6b48e0a95ed86d5ce3df9b9cb4fc5136714bd55643e21cd04f892bd17f02_0": {
+      "ruleId": "go.lang.security.audit.net.use-tls.use-tls",
+      "file": "demo/vulnerable-app/main.go",
+      "verdict": "exploitable",
+      "reason": "The server binds via http.ListenAndServe without TLS, serving handlers that process sensitive/attacker-controlled data (query lookups, command execution, SSRF fetch) over plaintext HTTP. No TLS configuration, HTTPS redirect, or reverse-proxy termination is present in this file, and the server is directly reachable on :8080, so all traffic including query parameters and response bodies is transmitted in cleartext, matching CWE-319.",
+      "evidence": [
+        "demo/vulnerable-app/main.go:54-58",
+        "demo/vulnerable-app/main.go:20-29",
+        "demo/vulnerable-app/main.go:33-41",
+        "demo/vulnerable-app/main.go:44-52"
+      ],
+      "codeHash": "sha256:c3f6609679fca0352f02e98c75b289e012c142fe842194dbb57136251863e4db",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-17T19:42:57Z",
+      "tokensUsed": 4738,
+      "issueRef": 5
+    },
+    "3701dfb49faabec25c390bcc2f888739693b56c242c86a7286e42c75813494db09e51697cf8e9e8f3d3a3e074aef73b5635e25ce823bc9c66b95a87224262199_0": {
+      "ruleId": "go.lang.security.injection.tainted-sql-string.tainted-sql-string",
+      "file": "demo/vulnerable-app/main.go",
+      "verdict": "exploitable",
+      "reason": "The handler lookupUser is registered at route /user (main.go:55) and reads the 'id' query parameter directly from the HTTP request (main.go:21) with no validation, encoding, or allow-listing. This raw string is interpolated via fmt.Sprintf directly into a SQL query string (main.go:22), which is then executed with db.QueryRow(query) (main.go:23) — not as a parameterized argument but as the full raw SQL text. There is no sanitization function, regex check, or type conversion applied to id anywhere in the flow, so an attacker can supply a value like `1 OR 1=1` or a UNION-based payload via the URL query string to alter the query semantics, resulting in classic SQL injection.",
+      "evidence": [
+        "demo/vulnerable-app/main.go:20-23",
+        "demo/vulnerable-app/main.go:55"
+      ],
+      "codeHash": "sha256:91baef489a82a11e726a41187adb9a73e7702350fed0b27ae9eb43f4bc85285f",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-17T19:43:00Z",
+      "tokensUsed": 9211,
+      "issueRef": 6
+    },
+    "41d45e20cc43458429a746f9f728b69e368d80afdc88195afa34a7b8bbf192d7eddf8551965634978cf2e273b2603907129c9b1adce0097c0d5cb5f4dc41fbf6_0": {
+      "ruleId": "go.lang.security.audit.database.string-formatted-query.string-formatted-query",
+      "file": "demo/vulnerable-app/main.go",
+      "verdict": "exploitable",
+      "reason": "The `id` parameter is taken directly from the HTTP query string (r.URL.Query().Get(\"id\")) with no validation or escaping, then concatenated via fmt.Sprintf directly into a SQL query string that is executed with db.QueryRow(query). There is no parameterization (no use of placeholders/args), no allowlist check, and no type coercion (e.g., atoi) before use, so an attacker can inject arbitrary SQL via the id query parameter.",
+      "evidence": [
+        "demo/vulnerable-app/main.go:20-23"
+      ],
+      "codeHash": "sha256:16a04dfcd6120eca78ea724ed23070eb1cb64120e9a46a583cdf7db155a99d0b",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-17T19:42:56Z",
+      "tokensUsed": 4670,
+      "issueRef": 4
+    },
+    "6a4178de645ca445accd65a96b247b64dab6852202264f7c0608d08ceeb4b9532f238aed9ae8405279b9b6d3dc8a6ad4e74e496d874fe72b4f9a8a217d9012f5_0": {
+      "ruleId": "go.lang.security.audit.xss.no-fprintf-to-responsewriter.no-fprintf-to-responsewriter",
+      "file": "demo/vulnerable-app/main.go",
+      "verdict": "exploitable",
+      "reason": "The `id` parameter from the query string is concatenated directly into the SQL query without any parameterization or escaping (main.go:21-22), making the query itself vulnerable to SQL injection (e.g. via UNION SELECT). This means an attacker can control the `name` and `email` values returned by the query. These values are then written directly to the HTTP response via `fmt.Fprintf(w, \"%s \u003c%s\u003e\\n\", name, email)` (main.go:29) with no HTML escaping and no explicit Content-Type header set anywhere in the handler, so an attacker-controlled string (injected via the SQL injection) is reflected verbatim into the response body. This is a genuine unescaped-output-to-ResponseWriter pattern with an attacker-reachable data path (via SQLi to control the reflected fields), not just theoretical DB content.",
+      "evidence": [
+        "demo/vulnerable-app/main.go:20-29"
+      ],
+      "codeHash": "sha256:6b8396fc9342add9f52469ee689837eb95aec05b6c687f09c6ad20469f5c74df",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-17T19:43:25Z",
+      "tokensUsed": 12236,
+      "issueRef": 9
+    },
+    "bfc64508ec9eb1ffba4c8d7001cc0f10ac2b1be6157726ac1122efe21484c1d1f0fbdec90780b6312936d5115478e1faba8a07c5cf343ad8e0638f80d9f08a3e_0": {
+      "ruleId": "go.lang.security.audit.dangerous-exec-command.dangerous-exec-command",
+      "file": "demo/vulnerable-app/main.go",
+      "verdict": "exploitable",
+      "reason": "The `host` query parameter from the HTTP request (r.URL.Query().Get(\"host\")) is directly concatenated into a shell command string passed to `sh -c`, with no validation, escaping, or allow-listing. Any HTTP client can supply arbitrary shell metacharacters (e.g. `; rm -rf /` or `$(...)`) in the `host` parameter to the `/ping` route, which will be executed by the shell.",
+      "evidence": [
+        "demo/vulnerable-app/main.go:33-35",
+        "demo/vulnerable-app/main.go:56"
+      ],
+      "codeHash": "sha256:c710fcca3aef8a05453e2eb0197adc08e515ffe719425bd85d670dbeca2dc5b0",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-17T19:42:56Z",
+      "tokensUsed": 4708,
+      "issueRef": 3
+    },
+    "d8024c1808236273868fa1f44b20c1dbebae51332353213dc4fbcc815c1eca01c20fe5ec76d102368fc57be5dfcec615810a2b76e5e4a28825164af4d79dcf06_0": {
+      "ruleId": "go.lang.security.audit.xss.no-direct-write-to-responsewriter.no-direct-write-to-responsewriter",
+      "file": "demo/vulnerable-app/main.go",
+      "verdict": "exploitable",
+      "reason": "The `host` query parameter is concatenated unsanitized into a shell command executed via exec.Command(\"sh\",\"-c\",...) at demo/vulnerable-app/main.go:35, giving the attacker full command injection control over the process's stdout/stderr. The resulting `out` bytes (fully attacker-controllable, e.g. via `host=x; echo \u003cscript\u003e...\u003c/script\u003e`) are then written directly to the HTTP response with w.Write(out) at line 40, with no HTML escaping or use of html/template. Since Go's ResponseWriter will content-sniff the body when no Content-Type header is set, an attacker-crafted payload can be rendered as HTML/script in the browser, making this a genuine reflected XSS (compounded by the underlying command injection).",
+      "evidence": [
+        "demo/vulnerable-app/main.go:33-40"
+      ],
+      "codeHash": "sha256:238a0ab037748a6f351649e46ca99978dcaaab9c82104f1074faf0ef1ffab041",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-17T19:43:07Z",
+      "tokensUsed": 5262,
+      "issueRef": 8
+    },
+    "df5a74145698900452714979dcda4a6b0bda78f7074ff43b4b2340c23a8e80c7b54fd86e2b636e358b77f549bb552395d06bc9160380c70655580afe59a60edd_0": {
+      "ruleId": "go.lang.security.injection.tainted-url-host.tainted-url-host",
+      "file": "demo/vulnerable-app/main.go",
+      "verdict": "exploitable",
+      "reason": "The fetch handler at demo/vulnerable-app/main.go:45 passes the raw 'url' query parameter directly from the incoming HTTP request into http.Get with no validation, allowlisting, scheme/host checks, or any other sanitization. The handler is registered and reachable via the /fetch route (main.go:57), and the response body is streamed back to the client (main.go:51), confirming full attacker control over the destination of the server-side request — a classic SSRF sink.",
+      "evidence": [
+        "demo/vulnerable-app/main.go:44-52",
+        "demo/vulnerable-app/main.go:57"
+      ],
+      "codeHash": "sha256:8c9e8cadefbd36c28df39645ddf30d6c06a4b0b0a98eebf8987de77835a216b9",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-17T19:43:03Z",
+      "tokensUsed": 5405,
+      "issueRef": 7
+    }
+  }
+}
