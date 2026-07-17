@@ -82,21 +82,16 @@ jobs:
           git add triage-cache.json
           git commit -m "chore(triage): nightly verdict cache update [skip ci]"
           git push -f origin "$BRANCH"
+          # A changed cache means new verdicts — a PR is required. Update the
+          # existing one, or open it; if opening fails, fail the job (loud).
           if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
-            gh pr edit "$BRANCH" --body-file triage-report.md || true
+            gh pr edit "$BRANCH" --body-file triage-report.md
             exit 0
           fi
-          # The cache is already committed and pushed; if the run can't open the
-          # PR (repo blocks Actions from creating PRs), surface it loudly rather
-          # than failing an otherwise-successful triage.
           if ! gh pr create \
             --head "$BRANCH" \
             --title "Nightly SAST triage: verdict cache update $(date -u +%Y-%m-%d)" \
             --body-file triage-report.md; then
-            echo "::warning::Could not open the triage PR. Enable Settings → Actions → General → 'Allow GitHub Actions to create and approve pull requests' (or use a PAT / GitHub App token)."
-            {
-              echo "### Triage PR not opened automatically"
-              echo "Verdict cache committed to \`$BRANCH\`, but the run lacks PR-create permission."
-              echo "Open it: https://github.com/${{ github.repository }}/compare/$BRANCH?expand=1"
-            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Triage produced new verdicts but the PR could not be opened. Enable Settings → Actions → General → Workflow permissions → 'Allow GitHub Actions to create and approve pull requests'."
+            exit 1
           fi
