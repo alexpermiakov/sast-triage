@@ -39,13 +39,13 @@ jobs:
       - name: Materialize today's vulnerability
         run: ./demo/inject.sh
 
-      - name: Install semgrep
-        run: |
-          pipx install semgrep==1.86.0
-          pipx inject semgrep setuptools # semgrep imports pkg_resources; Python 3.12 venvs don't ship setuptools
-
+      # semgrep from its official image, pinned by digest (= v1.86.0). Avoids the
+      # pipx/pkg_resources breakage on Python 3.12 runners.
       - name: Scan the demo app
-        run: semgrep scan --config auto --sarif --dataflow-traces --output demo-findings.sarif demo/vulnerable-app
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
+            semgrep scan --config auto --sarif --dataflow-traces --output demo-findings.sarif demo/vulnerable-app
 
       # Permanent cache, committed to demo/triage-cache.json. -repo . matches
       # semgrep's cwd-relative paths (demo/vulnerable-app/<pkg>/main.go).

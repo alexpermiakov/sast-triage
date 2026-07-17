@@ -30,15 +30,14 @@ jobs:
       - name: Build sast-triage
         run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
 
-      - name: Install semgrep
-        run: |
-          pipx install semgrep==1.86.0 # bump deliberately; keep in sync with testdata fixtures
-          pipx inject semgrep setuptools # semgrep imports pkg_resources; Python 3.12 venvs don't ship setuptools
-
-      # Exclude the demo app (it has its own daily workflow) and testdata
-      # fixtures so this run stays focused on the tool's own code.
+      # Run semgrep from its official image, pinned by digest (= v1.86.0; keep in
+      # sync with testdata fixtures). Avoids the pipx/pkg_resources breakage on
+      # Python 3.12 runners. --exclude keeps this focused on the tool's own code.
       - name: Scan
-        run: semgrep scan --config auto --sarif --dataflow-traces --exclude demo --exclude testdata --output findings.sarif
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
+            semgrep scan --config auto --sarif --dataflow-traces --exclude demo --exclude testdata --output findings.sarif
 
       - name: Triage
         env:
