@@ -1,14 +1,21 @@
 name: Triage
 
-# Runs sast-triage against demo/vulnerable-app (a small, fixed, deliberately
-# vulnerable app) and publishes the triage report to the run summary + an
-# artifact. Nothing is committed. To triage a real repository instead, scan your
-# own code and point -repo at the checkout — see the README.
+# On-demand demo of the full pipeline against demo/vulnerable-app (a small, fixed,
+# deliberately vulnerable app). Each run starts from an empty cache so it always
+# produces output: it opens/refreshes ONE review PR with the verdict cache, and
+# files a GitHub issue per exploitable finding (title-prefixed "<TEST> ") which it
+# then auto-closes — so the issue flow is demonstrated without leaving open vulns
+# on the repo. (A real deployment keeps a persistent cache and leaves issues open;
+# see the README.)
 
 on:
   schedule:
     - cron: "0 1 * * *"
   workflow_dispatch: {}
+
+concurrency:
+  group: triage
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -16,6 +23,10 @@ permissions:
 jobs:
   triage:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the triage/demo branch
+      issues: write # file + close demo issues
+      pull-requests: write # open/refresh the review PR
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -34,17 +45,24 @@ jobs:
             semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
             semgrep scan --config auto --sarif --dataflow-traces --output demo-findings.sarif demo/vulnerable-app
 
-      # Throwaway cache (RUNNER_TEMP): nothing is committed, so each run
-      # re-triages the fixed app fresh. -repo . matches semgrep's cwd-relative paths.
+      # Start from an empty cache so every run re-triages and produces a full PR +
+      # issues (a demo choice — a real run keeps the cache to skip repeat work).
       - name: Triage
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          rm -f demo/triage-cache.json
           sast-triage \
             -sarif demo-findings.sarif \
             -repo . \
-            -cache "$RUNNER_TEMP/triage-cache.json" \
-            -report demo-report.md
+            -cache demo/triage-cache.json \
+            -report demo-report.md \
+            -create-issues \
+            -github-repo "${{ github.repository }}" \
+            -issue-label triage-demo \
+            -issue-title-prefix "<TEST> " \
+            -link-base "https://github.com/${{ github.repository }}/blob/${{ github.sha }}"
 
       - name: Publish report to run summary
         if: always()
@@ -52,6 +70,39 @@ jobs:
           if [ -f demo-report.md ]; then
             cat demo-report.md >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Refresh review PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(jq '.entries | length' demo/triage-cache.json 2>/dev/null || echo 0)" -eq 0 ]; then
+            echo "no verdicts produced; no PR"
+            exit 0
+          fi
+          BRANCH="triage/demo"
+          git config user.name "sast-triage-bot"
+          git config user.email "sast-triage-bot@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add -f demo/triage-cache.json # cache is gitignored on main; force-add for the demo PR
+          git commit -m "demo(triage): verdict cache $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+          git push -f origin "$BRANCH"
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
+            gh pr edit "$BRANCH" --body-file demo-report.md
+          elif ! gh pr create --head "$BRANCH" --title "Demo triage: verdict review" --body-file demo-report.md; then
+            echo "::error::Could not open the review PR. Enable Settings → Actions → General → Workflow permissions → 'Allow GitHub Actions to create and approve pull requests'."
+            exit 1
+          fi
+
+      # Demonstrate the issue flow, then clean up: the tool filed one <TEST> issue
+      # per exploitable finding; close them so no open vulns linger on the repo.
+      - name: Auto-close demo issues
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for n in $(gh issue list --label triage-demo --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "Auto-closed: demo triage run (intentional test vulnerability, not a real issue)."
+          done
 
       - name: Upload artifacts
         if: always()

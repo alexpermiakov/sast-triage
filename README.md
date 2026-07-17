@@ -216,16 +216,23 @@ trace), command injection, SSRF, and a hardcoded credential — so a triage run 
 has something to find.
 
 The [`triage` workflow](.github/workflows/triage.yml) runs it end to end: scan the app
-with semgrep, triage the findings with the bounded agent, and publish the report to the
-run summary and a build artifact. It's a fixed target, so nothing is generated and
-**nothing is committed** — the app is checked in by hand and the workflow only reads it.
-Expect the agent to trace the query parameter into the SQL sink and call it
-`exploitable`, decide the hardcoded credential from the snippet alone, and cite
-`file:line` evidence for each.
+with semgrep, triage the findings with the bounded agent, then exercise both output
+paths — it opens (and refreshes) **one review PR** carrying the verdict cache, and files
+a GitHub **issue per `exploitable` finding**. Expect the agent to trace the query
+parameter into the SQL sink and call it `exploitable`, decide the hardcoded credential
+from the snippet alone, and cite `file:line` evidence for each.
 
-The workflow needs the `ANTHROPIC_API_KEY` secret. It scans only `demo/vulnerable-app`;
-`testdata/` holds the frozen unit-test fixtures (pinned to test assertions,
-auto-short-circuited to benign) and is never scanned.
+Because it's a *demo* on a public repo, two things differ from a real deployment: each
+run starts from an **empty cache** so it always produces output (a real run keeps the
+cache to skip repeat work), and the filed issues are title-prefixed `<TEST>` and
+**auto-closed** at the end of the run — the issue flow is demonstrated without leaving
+open "vulnerabilities" on the repo. The app itself is committed by hand; the only thing
+the workflow commits is the verdict cache, onto the `triage/demo` branch for the PR.
+
+The workflow needs the `ANTHROPIC_API_KEY` secret and the repo setting **Settings →
+Actions → General → "Allow GitHub Actions to create and approve pull requests."** It
+scans only `demo/vulnerable-app`; `testdata/` holds the frozen unit-test fixtures
+(pinned to test assertions, auto-short-circuited to benign) and is never scanned.
 
 Preview a run locally:
 

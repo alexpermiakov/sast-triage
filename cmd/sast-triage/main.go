@@ -20,35 +20,37 @@ import (
 
 func main() {
 	var (
-		sarifPath    = flag.String("sarif", "findings.sarif", "SARIF 2.1.0 input (semgrep --sarif --dataflow-traces)")
-		cachePath    = flag.String("cache", "triage-cache.json", "triage cache file (committed to git)")
-		repoRoot     = flag.String("repo", ".", "repository root the findings refer to")
-		reportPath   = flag.String("report", "triage-report.md", "markdown report output")
-		model        = flag.String("model", "claude-sonnet-5", "Anthropic model for triage")
-		maxIter      = flag.Int("max-iterations", 10, "agent loop iteration cap per finding")
-		tokenBudget  = flag.Int("token-budget", 60000, "token budget per finding (input+output)")
-		maxFindings  = flag.Int("max-findings-budget", 50, "max findings triaged by LLM per run; overflow deferred as uncertain (0 = unlimited)")
-		parallel     = flag.Int("parallel", 4, "findings triaged concurrently")
-		linkBase     = flag.String("link-base", "", "base URL for clickable evidence links, e.g. https://github.com/owner/repo/blob/<sha>")
-		createIssues = flag.Bool("create-issues", false, "file GitHub issues for exploitable findings (needs GITHUB_TOKEN)")
-		githubRepo   = flag.String("github-repo", os.Getenv("GITHUB_REPOSITORY"), "owner/name for issue creation")
-		issueLabel   = flag.String("issue-label", "security/triage-confirmed", "label for filed issues")
+		sarifPath        = flag.String("sarif", "findings.sarif", "SARIF 2.1.0 input (semgrep --sarif --dataflow-traces)")
+		cachePath        = flag.String("cache", "triage-cache.json", "triage cache file (committed to git)")
+		repoRoot         = flag.String("repo", ".", "repository root the findings refer to")
+		reportPath       = flag.String("report", "triage-report.md", "markdown report output")
+		model            = flag.String("model", "claude-sonnet-5", "Anthropic model for triage")
+		maxIter          = flag.Int("max-iterations", 10, "agent loop iteration cap per finding")
+		tokenBudget      = flag.Int("token-budget", 60000, "token budget per finding (input+output)")
+		maxFindings      = flag.Int("max-findings-budget", 50, "max findings triaged by LLM per run; overflow deferred as uncertain (0 = unlimited)")
+		parallel         = flag.Int("parallel", 4, "findings triaged concurrently")
+		linkBase         = flag.String("link-base", "", "base URL for clickable evidence links, e.g. https://github.com/owner/repo/blob/<sha>")
+		createIssues     = flag.Bool("create-issues", false, "file GitHub issues for exploitable findings (needs GITHUB_TOKEN)")
+		githubRepo       = flag.String("github-repo", os.Getenv("GITHUB_REPOSITORY"), "owner/name for issue creation")
+		issueLabel       = flag.String("issue-label", "security/triage-confirmed", "label for filed issues")
+		issueTitlePrefix = flag.String("issue-title-prefix", "", "prefix prepended to filed issue titles, e.g. \"<TEST> \"")
 	)
 	flag.Parse()
 
 	cfg := pipeline.Config{
-		SARIFPath:     *sarifPath,
-		CachePath:     *cachePath,
-		RepoRoot:      *repoRoot,
-		ReportPath:    *reportPath,
-		Model:         *model,
-		MaxIterations: *maxIter,
-		TokenBudget:   *tokenBudget,
-		MaxFindings:   *maxFindings,
-		Parallel:      *parallel,
-		LinkBase:      *linkBase,
-		IssueLabel:    *issueLabel,
-		Log:           os.Stderr,
+		SARIFPath:        *sarifPath,
+		CachePath:        *cachePath,
+		RepoRoot:         *repoRoot,
+		ReportPath:       *reportPath,
+		Model:            *model,
+		MaxIterations:    *maxIter,
+		TokenBudget:      *tokenBudget,
+		MaxFindings:      *maxFindings,
+		Parallel:         *parallel,
+		LinkBase:         *linkBase,
+		IssueLabel:       *issueLabel,
+		IssueTitlePrefix: *issueTitlePrefix,
+		Log:              os.Stderr,
 	}
 
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {

@@ -26,8 +26,9 @@ internal/
 .github/workflows/   ci.yml (lint+test on PRs), triage.yml (daily triage of demo/)
 testdata/            real semgrep SARIF fixtures (pinned to unit-test line numbers)
 demo/                vulnerable-app/ (own go.mod; fixed, hand-written, intentionally
-                     vulnerable main.go). triage.yml scans + triages it and publishes
-                     the report as an artifact — nothing is committed or generated.
+                     vulnerable main.go). triage.yml scans + triages it, refreshes a
+                     review PR (verdict cache on the triage/demo branch), and files
+                     per-finding <TEST> issues that it auto-closes.
 ```
 
 Do not add findings-bearing source to `testdata/`: those paths are short-circuited

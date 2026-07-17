@@ -36,8 +36,9 @@ type Config struct {
 	MaxFindings   int // run-level cap on LLM-triaged findings; overflow deferred
 	Parallel      int
 
-	LinkBase   string
-	IssueLabel string
+	LinkBase         string
+	IssueLabel       string
+	IssueTitlePrefix string // prepended to filed issue titles (e.g. "<TEST> ")
 
 	Client agent.Client // nil is allowed when every finding is cached/short-circuit
 	Issues IssueCreator // nil → skip issue routing
@@ -221,7 +222,7 @@ func fileIssues(ctx context.Context, cfg Config, c *cache.Cache, items []report.
 		if !ok || e.IssueRef != 0 {
 			continue
 		}
-		n, err := cfg.Issues.CreateIssue(ctx, report.IssueTitle(it), report.IssueBody(it, report.Options{LinkBase: cfg.LinkBase}), []string{cfg.IssueLabel})
+		n, err := cfg.Issues.CreateIssue(ctx, cfg.IssueTitlePrefix+report.IssueTitle(it), report.IssueBody(it, report.Options{LinkBase: cfg.LinkBase}), []string{cfg.IssueLabel})
 		if err != nil {
 			fmt.Fprintf(cfg.Log, "failed to file issue for %s: %v\n", it.Location(), err)
 			continue
