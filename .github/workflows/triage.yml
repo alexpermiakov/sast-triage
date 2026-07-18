@@ -50,23 +50,24 @@ jobs:
           INPUT_PROVIDER: ${{ inputs.provider }}
           INPUT_MODEL: ${{ inputs.model }}
           INPUT_BASE_URL: ${{ inputs.base_url }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           PROVIDER="${INPUT_PROVIDER:-$TRIAGE_PROVIDER}"
           if [ "$PROVIDER" = anthropic ]; then DEFAULT="$ANTHROPIC_MODEL"; else DEFAULT="$OPENAI_MODEL"; fi
+          SKIP=false
+          if [ "$PROVIDER" = anthropic ] && [ -z "$ANTHROPIC_API_KEY" ]; then
+            SKIP=true
+            echo "::notice::no API key (fork PR?) — triage skipped."
+          fi
           {
             echo "provider=$PROVIDER"
             echo "model=${INPUT_MODEL:-$DEFAULT}"
             echo "base_url=${INPUT_BASE_URL:-$OPENAI_BASE_URL}"
+            echo "skip=$SKIP"
           } >> "$GITHUB_OUTPUT"
           echo "triaging with $PROVIDER / ${INPUT_MODEL:-$DEFAULT}"
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: stable
-
-      - name: Build sast-triage
-        run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
 
       - name: Install opengrep
         run: |
@@ -99,33 +100,21 @@ jobs:
           for i in $(seq 1 30); do curl -fsS http://localhost:11434/api/version && break || sleep 2; done
           curl -fsS http://localhost:11434/api/pull -d "{\"name\":\"$MODEL\"}"
 
-      # PR gates on new exploitables (the default); push opts out of the gate,
-      # files issues (-create-issues; off unless passed) + writes the annotated
-      # SARIF.
+      # Dogfood: `uses: ./` resolves action.yml from this checkout, so PRs run
+      # their own action code. PR gates on new exploitables (the default); push
+      # opts out of the gate, files issues + writes the annotated SARIF.
       - name: Triage
-        env:
-          PROVIDER: ${{ steps.llm.outputs.provider }}
-          MODEL: ${{ steps.llm.outputs.model }}
-          BASE_URL: ${{ steps.llm.outputs.base_url }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          LINK_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          if [ "$PROVIDER" = anthropic ]; then
-            [ -z "$ANTHROPIC_API_KEY" ] && { echo "::notice::no API key (fork PR?) — triage skipped."; exit 0; }
-            PROVIDER_ARGS="-provider anthropic -model $MODEL"
-          else
-            PROVIDER_ARGS="-provider openai -base-url $BASE_URL -model $MODEL"
-          fi
-          if [ "${{ github.event_name }}" = pull_request ]; then
-            MODE="" # gate is on by default: new exploitable → exit 3
-          else
-            MODE="-fail-on-new-exploitable=false -create-issues -github-repo $REPO -triaged-sarif triaged.sarif"
-          fi
-          sast-triage $PROVIDER_ARGS \
-            -sarif findings.sarif -repo . $MODE \
-            -link-base "https://github.com/$REPO/blob/$LINK_SHA"
+        if: steps.llm.outputs.skip != 'true'
+        uses: ./
+        with:
+          provider: ${{ steps.llm.outputs.provider }}
+          model: ${{ steps.llm.outputs.model }}
+          base-url: ${{ steps.llm.outputs.provider == 'openai' && steps.llm.outputs.base_url || '' }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          fail-on-new-exploitable: ${{ github.event_name == 'pull_request' }}
+          create-issues: ${{ github.event_name != 'pull_request' }}
+          triaged-sarif: ${{ github.event_name != 'pull_request' && 'triaged.sarif' || '' }}
+          link-base: https://github.com/${{ github.repository }}/blob/${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Upload triaged SARIF to Code Scanning
         id: codescan

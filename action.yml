@@ -1,0 +1,136 @@
+# Composite action wrapping the sast-triage binary. It builds the binary from
+# this action's own pinned source (github.action_path), so the ref you pin —
+# tag, SHA, or `uses: ./` for this repo's dogfood workflow — is exactly the
+# code that runs. Inputs mirror the CLI flags one-to-one (flag `-base-url` →
+# input `base-url`); logic stays in the Go binary, this file only maps inputs
+# to flags.
+name: SAST Triage
+description: >-
+  Triage SAST findings (SARIF 2.1.0) with a bounded LLM agent and an
+  evidence-keyed verdict cache. Verdicts are benign | exploitable | uncertain;
+  the step fails only when the run decides a NEW exploitable finding.
+author: alexpermiakov
+branding:
+  icon: search
+  color: purple
+
+inputs:
+  provider:
+    description: "LLM provider: openai (any OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, OpenAI itself) or anthropic"
+    default: openai
+  model:
+    description: "Model name — always required (e.g. claude-sonnet-5 for anthropic, qwen2.5-coder:7b for openai)"
+    required: true
+  base-url:
+    description: "OpenAI-compatible API base URL; required when provider is openai (e.g. http://localhost:11434/v1). No default: the tool only ever talks to the endpoint you name"
+    default: ""
+  anthropic-api-key:
+    description: "API key for provider: anthropic. Alternative to setting ANTHROPIC_API_KEY as env on this step"
+    default: ""
+  openai-api-key:
+    description: "API key for hosted OpenAI-compatible endpoints (local ones need none). Alternative to setting OPENAI_API_KEY as env on this step"
+    default: ""
+  sarif:
+    description: SARIF 2.1.0 input produced by your scanner
+    default: findings.sarif
+  repo:
+    description: Repository root the findings refer to
+    default: "."
+  cache:
+    description: Verdict cache file (commit it to git)
+    default: triage-cache.json
+  report:
+    description: Markdown report output
+    default: triage-report.md
+  triaged-sarif:
+    description: Write a verdict-annotated SARIF copy here for Code Scanning upload; empty = skip
+    default: ""
+  effort:
+    description: "Triage depth per finding: small | medium | large"
+    default: medium
+  max-findings-budget:
+    description: Max findings triaged by LLM per run (0 = unlimited)
+    default: "50"
+  parallel:
+    description: Findings triaged concurrently
+    default: "4"
+  fail-on-new-exploitable:
+    description: Fail the step if this run decides any NEW exploitable finding (cache hits never trip it)
+    default: "true"
+  create-issues:
+    description: File GitHub issues for exploitable findings (needs an issues-writable token)
+    default: "false"
+  github-repo:
+    description: owner/name for issue creation; defaults to the current repository
+    default: ""
+  github-token:
+    description: Token used for issue creation when create-issues is true
+    default: ${{ github.token }}
+  link-base:
+    description: Base URL for clickable evidence links, e.g. https://github.com/owner/repo/blob/<sha>
+    default: ""
+  extra-args:
+    description: 'Extra CLI flags appended verbatim, e.g. "-max-iterations 15 -issue-label security"'
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: stable
+        # go.sum lives in the action path, outside the workspace on remote use,
+        # where setup-go's cache glob cannot see it.
+        cache: false
+
+    - name: Build sast-triage from the pinned action source
+      shell: bash
+      run: go build -C "$GITHUB_ACTION_PATH" -o "$RUNNER_TEMP/sast-triage" ./cmd/sast-triage
+
+    # Inputs reach the shell only via env (never interpolated into the script),
+    # so a hostile model/base-url string cannot inject commands.
+    - name: Triage
+      shell: bash
+      env:
+        INPUT_PROVIDER: ${{ inputs.provider }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_BASE_URL: ${{ inputs.base-url }}
+        INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        INPUT_OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        INPUT_SARIF: ${{ inputs.sarif }}
+        INPUT_REPO: ${{ inputs.repo }}
+        INPUT_CACHE: ${{ inputs.cache }}
+        INPUT_REPORT: ${{ inputs.report }}
+        INPUT_TRIAGED_SARIF: ${{ inputs.triaged-sarif }}
+        INPUT_EFFORT: ${{ inputs.effort }}
+        INPUT_MAX_FINDINGS_BUDGET: ${{ inputs.max-findings-budget }}
+        INPUT_PARALLEL: ${{ inputs.parallel }}
+        INPUT_FAIL_ON_NEW_EXPLOITABLE: ${{ inputs.fail-on-new-exploitable }}
+        INPUT_CREATE_ISSUES: ${{ inputs.create-issues }}
+        INPUT_GITHUB_REPO: ${{ inputs.github-repo }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_LINK_BASE: ${{ inputs.link-base }}
+        INPUT_EXTRA_ARGS: ${{ inputs.extra-args }}
+      run: |
+        args=(
+          -provider "$INPUT_PROVIDER" -model "$INPUT_MODEL"
+          -sarif "$INPUT_SARIF" -repo "$INPUT_REPO"
+          -cache "$INPUT_CACHE" -report "$INPUT_REPORT"
+          -effort "$INPUT_EFFORT"
+          -max-findings-budget "$INPUT_MAX_FINDINGS_BUDGET"
+          -parallel "$INPUT_PARALLEL"
+          -fail-on-new-exploitable="$INPUT_FAIL_ON_NEW_EXPLOITABLE"
+        )
+        if [ -n "$INPUT_BASE_URL" ]; then args+=(-base-url "$INPUT_BASE_URL"); fi
+        if [ -n "$INPUT_TRIAGED_SARIF" ]; then args+=(-triaged-sarif "$INPUT_TRIAGED_SARIF"); fi
+        if [ -n "$INPUT_LINK_BASE" ]; then args+=(-link-base "$INPUT_LINK_BASE"); fi
+        if [ -n "$INPUT_GITHUB_REPO" ]; then args+=(-github-repo "$INPUT_GITHUB_REPO"); fi
+        if [ "$INPUT_CREATE_ISSUES" = "true" ]; then args+=(-create-issues); fi
+        if [ -n "$INPUT_EXTRA_ARGS" ]; then
+          read -r -a extra <<< "$INPUT_EXTRA_ARGS"
+          args+=("${extra[@]}")
+        fi
+        if [ -n "$INPUT_ANTHROPIC_API_KEY" ]; then export ANTHROPIC_API_KEY="$INPUT_ANTHROPIC_API_KEY"; fi
+        if [ -n "$INPUT_OPENAI_API_KEY" ]; then export OPENAI_API_KEY="$INPUT_OPENAI_API_KEY"; fi
+        export GITHUB_TOKEN="${GITHUB_TOKEN:-$INPUT_GITHUB_TOKEN}"
+        "$RUNNER_TEMP/sast-triage" "${args[@]}"

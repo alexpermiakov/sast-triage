@@ -29,6 +29,9 @@ internal/
   github/            minimal Issues REST client (dedupe owned by cache issueRef)
   pipeline/          run orchestration: partition, budget, errgroup fan-out,
                      single-writer merge, issue routing
+action.yml           composite GitHub Action wrapping the binary; builds from the
+                     pinned action source (github.action_path), inputs mirror CLI
+                     flags 1:1, dogfooded by triage.yml via `uses: ./`
 .github/workflows/   ci.yml (lint+test on push/PR), triage.yml (dogfood: scans this
                      repo on push/PR to main; PR jobs are read-only and gate on new
                      exploitables, main jobs file issues (via the opt-in

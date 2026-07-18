@@ -52,17 +52,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with: { go-version: stable }
-      - run: GOBIN=/usr/local/bin go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
 
       # → produce findings.sarif with your scanner here (opengrep example below ⬇)
 
       - name: Triage — fail only on NEW exploitable findings
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: sast-triage -provider anthropic -model claude-sonnet-5 -sarif findings.sarif -repo .
+        uses: alexpermiakov/sast-triage@v1 # or pin a commit SHA
+        with:
+          provider: anthropic
+          model: claude-sonnet-5
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
+
+The action needs no setup step: it installs Go and builds the binary from the exact revision you pinned — the ref after `@` is both the action and the code that runs.
 
 </details>
 
@@ -85,20 +86,18 @@ jobs:
         ports: ["11434:11434"]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with: { go-version: stable }
-      - run: GOBIN=/usr/local/bin go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
       - run: curl -fsS http://localhost:11434/api/pull -d '{"name":"qwen2.5-coder:1.5b-instruct"}'
 
       # → produce findings.sarif with your scanner here (opengrep example below ⬇)
 
       - name: Triage — fail only on NEW exploitable findings
-        run: |
-          sast-triage -sarif findings.sarif -repo . \
-            -base-url http://localhost:11434/v1 -model qwen2.5-coder:1.5b-instruct
+        uses: alexpermiakov/sast-triage@v1 # or pin a commit SHA
+        with:
+          base-url: http://localhost:11434/v1
+          model: qwen2.5-coder:1.5b-instruct
 ```
 
-`qwen2.5-coder:1.5b-instruct` is what this repo's own local-model runs use — honest but cautious: verdicts are fail-closed, so a tiny model says `uncertain` a lot and confident `benign` rarely. On a self-hosted GPU runner (`runs-on: [self-hosted, gpu]`), swap in a model with real judgment — e.g. `qwen3-coder:30b` — and keep everything else identical. The same two flags also point at any OpenAI-compatible endpoint — vLLM, LM Studio, or OpenAI itself (`-base-url https://api.openai.com/v1` + `OPENAI_API_KEY`).
+`qwen2.5-coder:1.5b-instruct` is what this repo's own local-model runs use — honest but cautious: verdicts are fail-closed, so a tiny model says `uncertain` a lot and confident `benign` rarely. On a self-hosted GPU runner (`runs-on: [self-hosted, gpu]`), swap in a model with real judgment — e.g. `qwen3-coder:30b` — and keep everything else identical. The same two inputs also point at any OpenAI-compatible endpoint — vLLM, LM Studio, or OpenAI itself (`base-url: https://api.openai.com/v1` + `openai-api-key: ${{ secrets.OPENAI_API_KEY }}`).
 
 </details>
 
@@ -153,7 +152,9 @@ Real output, live: this repo triages its own intentionally vulnerable [`demo/`](
 For production, start from the [workflow this repo runs on itself](.github/workflows/triage.yml).
 
 <details open>
-<summary><strong>Flags</strong></summary>
+<summary><strong>Flags & action inputs</strong></summary>
+
+The GitHub Action exposes every flag as an input of the same name, minus the leading dash — `-base-url` becomes `base-url:`, `-fail-on-new-exploitable` becomes `fail-on-new-exploitable:` — with identical defaults:
 
 | Flag                       | Default              | Purpose                                                                                           |
 | -------------------------- | -------------------- | ------------------------------------------------------------------------------------------------- |
@@ -173,7 +174,7 @@ For production, start from the [workflow this repo runs on itself](.github/workf
 | `-github-repo`             | `$GITHUB_REPOSITORY` | `owner/name` for issue creation                                                                   |
 | `-link-base`               | —                    | E.g., `https://github.com/owner/repo/blob/<sha>`                                                  |
 
-API keys come from the environment: `ANTHROPIC_API_KEY` for `anthropic`, `OPENAI_API_KEY` for hosted OpenAI-compatible endpoints (local ones need none). Fine-tuning: `-max-iterations` and `-token-budget` override the `-effort` preset; `-issue-label` and `-issue-title-prefix` customize filed issues.
+API keys come from the environment: `ANTHROPIC_API_KEY` for `anthropic`, `OPENAI_API_KEY` for hosted OpenAI-compatible endpoints (local ones need none). The action also takes them as inputs — `anthropic-api-key:` / `openai-api-key:` — plus `github-token:` for issue creation (defaults to the workflow token) and `extra-args:` for the long tail (e.g. `extra-args: "-max-iterations 15"`). Fine-tuning: `-max-iterations` and `-token-budget` override the `-effort` preset; `-issue-label` and `-issue-title-prefix` customize filed issues.
 
 **Effort presets** (scale per-finding budgets):
 
