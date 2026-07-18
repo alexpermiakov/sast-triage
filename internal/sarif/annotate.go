@@ -9,7 +9,7 @@ import (
 // Triage is one verdict to attach to a result during annotation, keyed by the
 // same fingerprint Parse computes for that result.
 type Triage struct {
-	Verdict  string   // benign | exploitable | uncertain
+	Verdict  string // benign | exploitable | uncertain
 	Reason   string
 	Evidence []string // "path:line" refs cited by the verdict
 	Suppress bool     // also add a SARIF suppression (the caller decides, typically benign only)
