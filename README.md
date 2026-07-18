@@ -148,9 +148,11 @@ Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this — it
 
 </details>
 
-Real output, live: this repo triages its own intentionally vulnerable [`demo/`](demo/) — see the resulting [Security alerts](https://github.com/alexpermiakov/sast-triage/security/code-scanning) and [issues](https://github.com/alexpermiakov/sast-triage/issues). For production, start from the [workflow this repo runs on itself](.github/workflows/triage.yml): everything SHA-pinned, plus a push-to-main job that files issues (`-create-issues` — omit it and no issues are ever created), updates the Security tab, and maintains the cache review PR.
+Real output, live: this repo triages its own intentionally vulnerable [`demo/`](demo/) — see the resulting [Security alerts](https://github.com/alexpermiakov/sast-triage/security/code-scanning) and [issues](https://github.com/alexpermiakov/sast-triage/issues).
 
-<details>
+For production, start from the [workflow this repo runs on itself](.github/workflows/triage.yml).
+
+<details open>
 <summary><strong>Flags</strong></summary>
 
 | Flag                       | Default              | Purpose                                                                                           |
