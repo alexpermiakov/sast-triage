@@ -1,6 +1,6 @@
 name: Triage
 
-# Triages this repo's own semgrep findings.
+# Triages this repo's own opengrep findings.
 #
 # PR runs (read-only): scan + triage against the verdict cache committed on
 # main, publish the report to the job summary, and fail ONLY if the PR
@@ -43,14 +43,26 @@ jobs:
       - name: Build sast-triage
         run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
 
-      # semgrep from its official image, pinned by digest (= v1.86.0). Avoids the
-      # pipx/pkg_resources breakage on Python 3.12 runners. testdata/ holds frozen,
-      # line-pinned unit-test fixtures, not product code — excluded from the scan.
+      - name: Install opengrep
+        run: |
+          curl -fsSL -o /usr/local/bin/opengrep \
+            https://github.com/opengrep/opengrep/releases/download/v1.25.0/opengrep_manylinux_x86
+          echo "9ac4aebb47ba3f7b0d8fc641ac8749cb6c2f253f616131a67d9631e00d4bea33  /usr/local/bin/opengrep" | sha256sum -c
+          chmod +x /usr/local/bin/opengrep
+
+      - name: Checkout scan rules (pinned)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: opengrep/opengrep-rules
+          ref: f1d2b562b414783763fd02a6ed2736eaed622efa
+          path: .opengrep-rules
+
       - name: Scan
         run: |
-          docker run --rm -v "$PWD:/src" -w /src \
-            semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
-            semgrep scan --config auto --sarif --dataflow-traces --exclude testdata --output findings.sarif
+          opengrep scan -f .opengrep-rules/go -f .opengrep-rules/yaml \
+            --sarif --dataflow-traces --exclude testdata --exclude .opengrep-rules \
+            --output findings.sarif
+          rm -rf .opengrep-rules
 
       # secrets.* is not usable in `if:` directly; route through an env var.
       - name: Check API key availability
@@ -108,11 +120,27 @@ jobs:
       - name: Build sast-triage
         run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
 
+      # Same pinned scanner setup as pr-triage; see the comment there.
+      - name: Install opengrep
+        run: |
+          curl -fsSL -o /usr/local/bin/opengrep \
+            https://github.com/opengrep/opengrep/releases/download/v1.25.0/opengrep_manylinux_x86
+          echo "9ac4aebb47ba3f7b0d8fc641ac8749cb6c2f253f616131a67d9631e00d4bea33  /usr/local/bin/opengrep" | sha256sum -c
+          chmod +x /usr/local/bin/opengrep
+
+      - name: Checkout scan rules (pinned)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: opengrep/opengrep-rules
+          ref: f1d2b562b414783763fd02a6ed2736eaed622efa
+          path: .opengrep-rules
+
       - name: Scan
         run: |
-          docker run --rm -v "$PWD:/src" -w /src \
-            semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
-            semgrep scan --config auto --sarif --dataflow-traces --exclude testdata --output findings.sarif
+          opengrep scan -f .opengrep-rules/go -f .opengrep-rules/yaml \
+            --sarif --dataflow-traces --exclude testdata --exclude .opengrep-rules \
+            --output findings.sarif
+          rm -rf .opengrep-rules
 
       - name: Triage
         env:
@@ -164,3 +192,4 @@ jobs:
             findings.sarif
             triage-report.md
           retention-days: 7
+

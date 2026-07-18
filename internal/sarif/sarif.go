@@ -1,4 +1,4 @@
-// Package sarif parses semgrep SARIF 2.1.0 output into triage findings.
+// Package sarif parses opengrep/semgrep SARIF 2.1.0 output into triage findings.
 // It is pure: no I/O beyond reading the given file.
 package sarif
 

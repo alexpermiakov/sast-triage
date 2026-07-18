@@ -27,7 +27,8 @@ internal/
                      repo on push/PR to main; PR jobs are read-only and gate on new
                      exploitables, main jobs file issues + refresh the triage/main
                      cache review PR)
-testdata/            real semgrep SARIF fixtures (pinned to unit-test line numbers)
+testdata/            real scanner SARIF fixtures, opengrep/semgrep format (pinned
+                     to unit-test line numbers)
                      + sampleapp/, the intentionally vulnerable smoke-test target
 ```
 

@@ -85,14 +85,20 @@ The report is sorted by required human scrutiny: proposed suppressions first
 ## Use it on your repository
 
 `sast-triage` doesn't run the scanner. Anything that emits SARIF 2.1.0 with
-stable fingerprints works; [semgrep](https://semgrep.dev) is what's tested:
+stable fingerprints works; [opengrep](https://github.com/opengrep/opengrep)
+(the LGPL fork of semgrep CE — same rule format and SARIF shape) is what's
+tested:
 
 ```bash
 cd /path/to/your-repo
-semgrep scan --config auto --sarif --dataflow-traces --output findings.sarif
+# rules: clone github.com/opengrep/opengrep-rules and pass the language dirs you need
+opengrep scan -f /path/to/opengrep-rules/go --sarif --dataflow-traces --output findings.sarif
 
 sast-triage -sarif findings.sarif -repo . -cache triage-cache.json -report triage-report.md
 ```
+
+Semgrep's `--sarif --dataflow-traces` output works identically if you'd
+rather stay on it.
 
 Install: `go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest`
 
@@ -145,8 +151,9 @@ GitHub Actions to create and approve pull requests"*.
   vulnerabilities* — approving a suppression is a code review, with the
   evidence one click away.
 
-Conventions worth keeping if you adapt it: actions pinned by SHA (this is a
-security tool), default-deny `permissions:` with per-job elevation, a
+Conventions worth keeping if you adapt it: everything pinned — actions by
+SHA, the scanner binary by sha256, the ruleset by commit (this is a security
+tool), default-deny `permissions:` with per-job elevation, a
 `concurrency` group so runs can't race on the cache, and no write permissions
 of any kind on PR-triggered jobs. To make human approval of triage PRs
 mandatory rather than customary, use a GitHub App token and require reviews
@@ -183,11 +190,12 @@ non-destructive (verdicts, not deletions), carries reason + evidence +
 timestamps, and the PR diff is the audit trail. The agent's memory is
 version-controlled and human-reviewed.
 
-**Does it only work with semgrep?**
-It consumes SARIF 2.1.0, not semgrep. It expects stable result fingerprints
-(semgrep's `matchBasedId`) and uses dataflow traces when present. Other
-scanners' SARIF should adapt in ingest (`internal/sarif`) — scanner quirks
-are a parsing problem, not a prompting problem.
+**Does it only work with opengrep?**
+It consumes SARIF 2.1.0, not any one scanner. It expects stable result
+fingerprints (`matchBasedId`, emitted by both opengrep and semgrep) and uses
+dataflow traces when present. Other scanners' SARIF should adapt in ingest
+(`internal/sarif`) — scanner quirks are a parsing problem, not a prompting
+problem.
 
 **Can I use OpenAI / Gemini instead of Claude?**
 The loop talks to a one-method `Client` interface

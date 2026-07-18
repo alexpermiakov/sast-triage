@@ -22,7 +22,7 @@ import (
 
 func main() {
 	var (
-		sarifPath        = flag.String("sarif", "findings.sarif", "SARIF 2.1.0 input (semgrep --sarif --dataflow-traces)")
+		sarifPath        = flag.String("sarif", "findings.sarif", "SARIF 2.1.0 input (opengrep/semgrep --sarif --dataflow-traces)")
 		cachePath        = flag.String("cache", "triage-cache.json", "triage cache file (committed to git)")
 		repoRoot         = flag.String("repo", ".", "repository root the findings refer to")
 		reportPath       = flag.String("report", "triage-report.md", "markdown report output")

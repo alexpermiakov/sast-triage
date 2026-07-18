@@ -150,7 +150,7 @@ Scope changes since v1 acceptance, recorded per the header rule:
 
 - **Per-PR trigger mode is IN scope** (was explicitly out of v1; owner
   decision). Flag: `-fail-on-new-exploitable` → exit code 3 when the run
-  *decides* any finding exploitable. Cache hits never trip the gate: the
+  _decides_ any finding exploitable. Cache hits never trip the gate: the
   committed cache is the baseline, so pre-existing backlog cannot block a PR —
   only what the PR introduces. Nightly-mode exit-0 semantics are unchanged
   when the flag is absent.
@@ -162,7 +162,7 @@ Scope changes since v1 acceptance, recorded per the header rule:
   smoke-test fixture plus a captured report excerpt in the README. The
   "sample endpoint in the demo apps" line in Testing strategy is superseded.
 - **Tool output caps are preset-scaled, still hard-bounded.** `-effort
-  small|medium|large` scales read_file lines (100/200/400), grep matches
+small|medium|large` scales read_file lines (100/200/400), grep matches
   (25/50/100), per-finding token budget (30k/60k/120k), and iteration cap
   (6/10/15). Medium = the original constants and remains the default;
   explicit `-token-budget`/`-max-iterations` override the preset. No preset
