@@ -1,4 +1,20 @@
 {
   "version": 1,
-  "entries": {}
+  "entries": {
+    "00e2ba1144ea73da99f20c3dfb330ad6671c944cb04d2eb7c03d27229cfb94412c71cc3c38d95ba6d4f59cac1e6def0302aeae74dddf0b22946d08e653b2059a_0": {
+      "ruleId": "opengrep-rules.go.lang.correctness.permissions.incorrect-default-permission",
+      "file": "internal/cache/cache.go",
+      "verdict": "exploitable",
+      "reason": "os.CreateTemp creates the temp file with mode 0600, but the code explicitly widens it to 0644 via os.Chmod(tmp.Name(), 0o644) before renaming it into place as the on-disk cache file. This makes the triage-cache.json file world-readable, exceeding the 0600 least-privilege permission the rule requires. The change is unconditional and always executed on every Save() call (line 101), with no compensating access-control check elsewhere in the function.",
+      "evidence": [
+        "internal/cache/cache.go:89-93",
+        "internal/cache/cache.go:101-103"
+      ],
+      "codeHash": "sha256:c409a57d37fc1b1b61354b73d9c6e6fe7a4579b6d5d0aa0b2eba27f3433c6afe",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-18T08:14:30Z",
+      "tokensUsed": 7952,
+      "issueRef": 28
+    }
+  }
 }
