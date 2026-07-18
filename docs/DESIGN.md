@@ -125,10 +125,12 @@ returns exit code. No hidden state.
   action), then exploitable, then uncertain.
 - Cache delta: ALL verdict classes are written (exploitable verdicts are also
   memory — otherwise re-triaged forever).
-- Exploitable findings are ADDITIONALLY routed to GitHub Issues (one per
-  finding, deduped by fingerprint, `issueRef` stored in cache entry, label
-  `security/triage-confirmed`). PRs approve suppressions; issues own
-  vulnerabilities.
+- With `-create-issues` (off by default — most teams track vulnerabilities
+  elsewhere, e.g. Jira; it is also the fallback surface where Code Scanning
+  is unavailable): exploitable findings are ADDITIONALLY routed to GitHub
+  Issues (one per finding, deduped by fingerprint, `issueRef` stored in cache
+  entry, label `security/triage-confirmed`). PRs approve suppressions; issues
+  own vulnerabilities.
 - With `-triaged-sarif <path>`: a verdict-annotated copy of the input SARIF —
   every triaged result gains a `properties.triage` bag (verdict, reason,
   evidence); benign results also gain a SARIF suppression (kind `external`,
@@ -138,8 +140,8 @@ returns exit code. No hidden state.
 - Exit codes: 0 success; 1 pipeline failure; 2 usage error; 3 when this run
   _decides_ a finding exploitable. The gate is on by default (the tool's
   headline behavior; forgetting a flag must not silently disable gating);
-  runs that may not fail — issue-filing push-to-main jobs, report-only runs —
-  opt out with `-fail-on-new-exploitable=false`. Cache hits never trip the
+  runs that may not fail — push-to-main jobs, report-only runs — opt out
+  with `-fail-on-new-exploitable=false`. Cache hits never trip the
   gate: the committed cache is the baseline, so pre-existing backlog cannot
   block a PR — only what the PR introduces.
 
@@ -160,9 +162,9 @@ fixed; they are the proof-of-life.
 - PR jobs: read-only permissions; triage against the cache committed on main;
   gate via exit 3. No secret is involved, so fork PRs are triaged too (they no
   longer skip).
-- Push-to-main jobs: file one issue per exploitable; when the cache changed,
-  refresh ONE review PR (branch `triage/main`) carrying the cache delta with
-  the report as its body.
+- Push-to-main jobs: file one issue per exploitable (this workflow passes the
+  opt-in `-create-issues`); when the cache changed, refresh ONE review PR
+  (branch `triage/main`) carrying the cache delta with the report as its body.
 - Push-to-main jobs also upload the triaged SARIF to Code Scanning (category
   `sast-triage`) so the Security tab reflects post-triage truth. GitHub
   ignores the SARIF `suppressions` property on upload, so benign alerts are

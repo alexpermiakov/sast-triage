@@ -31,8 +31,9 @@ internal/
                      single-writer merge, issue routing
 .github/workflows/   ci.yml (lint+test on push/PR), triage.yml (dogfood: scans this
                      repo on push/PR to main; PR jobs are read-only and gate on new
-                     exploitables, main jobs file issues + refresh the triage/main
-                     cache review PR)
+                     exploitables, main jobs file issues (via the opt-in
+                     -create-issues flag) + refresh the triage/main cache
+                     review PR)
 demo/                vulnapp: intentionally vulnerable proof-of-life target,
                      scanned and triaged FOR REAL in CI — its findings stay
                      open on purpose (Security tab + issues showcase); never

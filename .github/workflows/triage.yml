@@ -100,7 +100,8 @@ jobs:
           curl -fsS http://localhost:11434/api/pull -d "{\"name\":\"$MODEL\"}"
 
       # PR gates on new exploitables (the default); push opts out of the gate,
-      # files issues + writes the annotated SARIF.
+      # files issues (-create-issues; off unless passed) + writes the annotated
+      # SARIF.
       - name: Triage
         env:
           PROVIDER: ${{ steps.llm.outputs.provider }}
