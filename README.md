@@ -34,7 +34,7 @@ graph LR
 One job: your scanner produces `findings.sarif`, `sast-triage` reads the code behind each finding, and the PR fails only on **new exploitable** ones. Pick a model — or skip CI and run it straight from your terminal:
 
 <details open>
-<summary><b>Claude</b> — most accurate verdicts; it's what this repo's own CI uses</summary>
+<summary><b>Claude</b> — what this repo's own CI uses</summary>
 
 Add an `ANTHROPIC_API_KEY` repo secret, then drop this into `.github/workflows/triage.yml`:
 
@@ -74,7 +74,7 @@ permissions:
   contents: read
 jobs:
   triage:
-    runs-on: ubuntu-latest # CPU-only demo; use your own GPU runners for real verdicts
+    runs-on: ubuntu-latest # CPU-only demo; for real verdicts: [self-hosted, gpu] + a bigger model
     services:
       ollama:
         image: ollama/ollama:latest
