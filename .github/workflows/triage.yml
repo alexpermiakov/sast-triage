@@ -1,32 +1,38 @@
 name: Triage
 
-# On-demand demo of the full pipeline against demo/vulnerable-app (a small, fixed,
-# deliberately vulnerable app). Each run starts from an empty cache so it always
-# produces output: it opens/refreshes ONE review PR with the verdict cache, and
-# files a GitHub issue per exploitable finding (title-prefixed "<TEST> ") which it
-# then auto-closes — so the issue flow is demonstrated without leaving open vulns
-# on the repo. (A real deployment keeps a persistent cache and leaves issues open;
-# see the README.)
+# Triages this repo's own semgrep findings.
+#
+# PR runs (read-only): scan + triage against the verdict cache committed on
+# main, publish the report to the job summary, and fail ONLY if the PR
+# introduces a new exploitable finding (exit 3) — pre-existing backlog never
+# blocks a PR. Fork PRs can't see the API key; they skip triage with a notice
+# instead of failing red.
+#
+# Push-to-main / manual runs (full): also file an issue per exploitable
+# finding, and when the verdict cache changed, refresh ONE review PR carrying
+# the cache delta with the report as its body. PRs approve suppressions;
+# issues own vulnerabilities.
 
 on:
-  schedule:
-    - cron: "0 1 * * *"
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch: {}
 
 concurrency:
-  group: triage
+  group: triage-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  triage:
+  pr-triage:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # push the triage/demo branch
-      issues: write # file + close demo issues
-      pull-requests: write # open/refresh the review PR
+      contents: read # deliberately no write perms on PR-triggered runs
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -38,71 +44,42 @@ jobs:
         run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
 
       # semgrep from its official image, pinned by digest (= v1.86.0). Avoids the
-      # pipx/pkg_resources breakage on Python 3.12 runners.
-      - name: Scan the demo app
+      # pipx/pkg_resources breakage on Python 3.12 runners. testdata/ holds frozen,
+      # line-pinned unit-test fixtures, not product code — excluded from the scan.
+      - name: Scan
         run: |
           docker run --rm -v "$PWD:/src" -w /src \
             semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
-            semgrep scan --config auto --sarif --dataflow-traces --output demo-findings.sarif demo/vulnerable-app
+            semgrep scan --config auto --sarif --dataflow-traces --exclude testdata --output findings.sarif
 
-      # Start from an empty cache so every run re-triages and produces a full PR +
-      # issues (a demo choice — a real run keeps the cache to skip repeat work).
-      - name: Triage
+      # secrets.* is not usable in `if:` directly; route through an env var.
+      - name: Check API key availability
+        id: key
+        env:
+          HAS_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: echo "available=$HAS_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Triage (gate on new exploitable)
+        if: steps.key.outputs.available == 'true'
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          rm -f demo/triage-cache.json
           sast-triage \
-            -sarif demo-findings.sarif \
+            -sarif findings.sarif \
             -repo . \
-            -cache demo/triage-cache.json \
-            -report demo-report.md \
-            -create-issues \
-            -github-repo "${{ github.repository }}" \
-            -issue-label triage-demo \
-            -issue-title-prefix "<TEST> " \
-            -link-base "https://github.com/${{ github.repository }}/blob/${{ github.sha }}"
+            -fail-on-new-exploitable \
+            -link-base "https://github.com/${{ github.repository }}/blob/${{ github.event.pull_request.head.sha }}"
+
+      - name: Skip notice (no API key)
+        if: steps.key.outputs.available != 'true'
+        run: echo "::notice::ANTHROPIC_API_KEY unavailable (fork PR?) — scan ran, triage skipped."
 
       - name: Publish report to run summary
         if: always()
         run: |
-          if [ -f demo-report.md ]; then
-            cat demo-report.md >> "$GITHUB_STEP_SUMMARY"
+          if [ -f triage-report.md ]; then
+            cat triage-report.md >> "$GITHUB_STEP_SUMMARY"
           fi
-
-      - name: Refresh review PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ "$(jq '.entries | length' demo/triage-cache.json 2>/dev/null || echo 0)" -eq 0 ]; then
-            echo "no verdicts produced; no PR"
-            exit 0
-          fi
-          BRANCH="triage/demo"
-          git config user.name "sast-triage-bot"
-          git config user.email "sast-triage-bot@users.noreply.github.com"
-          git checkout -B "$BRANCH"
-          git add -f demo/triage-cache.json # cache is gitignored on main; force-add for the demo PR
-          git commit -m "demo(triage): verdict cache $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
-          git push -f origin "$BRANCH"
-          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
-            gh pr edit "$BRANCH" --body-file demo-report.md
-          elif ! gh pr create --head "$BRANCH" --title "Demo triage: verdict review" --body-file demo-report.md; then
-            echo "::error::Could not open the review PR. Enable Settings → Actions → General → Workflow permissions → 'Allow GitHub Actions to create and approve pull requests'."
-            exit 1
-          fi
-
-      # Demonstrate the issue flow, then clean up: the tool filed one <TEST> issue
-      # per exploitable finding; close them so no open vulns linger on the repo.
-      - name: Auto-close demo issues
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for n in $(gh issue list --label triage-demo --state open --json number --jq '.[].number'); do
-            gh issue close "$n" --comment "Auto-closed: demo triage run (intentional test vulnerability, not a real issue)."
-          done
 
       - name: Upload artifacts
         if: always()
@@ -110,6 +87,80 @@ jobs:
         with:
           name: triage-${{ github.run_id }}
           path: |
-            demo-findings.sarif
-            demo-report.md
+            findings.sarif
+            triage-report.md
+          retention-days: 7
+
+  main-triage:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the triage/main cache branch
+      issues: write # file issues for exploitable findings
+      pull-requests: write # open/refresh the cache review PR
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      - name: Build sast-triage
+        run: go build -o /usr/local/bin/sast-triage ./cmd/sast-triage
+
+      - name: Scan
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
+            semgrep scan --config auto --sarif --dataflow-traces --exclude testdata --output findings.sarif
+
+      - name: Triage
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          sast-triage \
+            -sarif findings.sarif \
+            -repo . \
+            -create-issues \
+            -github-repo "${{ github.repository }}" \
+            -link-base "https://github.com/${{ github.repository }}/blob/${{ github.sha }}"
+
+      - name: Publish report to run summary
+        if: always()
+        run: |
+          if [ -f triage-report.md ]; then
+            cat triage-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Refresh cache review PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain -- triage-cache.json)" ]; then
+            echo "cache unchanged; no PR"
+            exit 0
+          fi
+          BRANCH="triage/main"
+          git config user.name "sast-triage-bot"
+          git config user.email "sast-triage-bot@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add triage-cache.json
+          git commit -m "chore(triage): verdict cache update $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+          git push -f origin "$BRANCH"
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
+            gh pr edit "$BRANCH" --body-file triage-report.md
+          elif ! gh pr create --head "$BRANCH" --title "SAST triage: verdict cache update" --body-file triage-report.md; then
+            echo "::error::Could not open the review PR. Enable Settings → Actions → General → Workflow permissions → 'Allow GitHub Actions to create and approve pull requests'."
+            exit 1
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: triage-${{ github.run_id }}
+          path: |
+            findings.sarif
+            triage-report.md
           retention-days: 7

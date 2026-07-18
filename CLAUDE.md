@@ -23,24 +23,24 @@ internal/
   github/            minimal Issues REST client (dedupe owned by cache issueRef)
   pipeline/          run orchestration: partition, budget, errgroup fan-out,
                      single-writer merge, issue routing
-.github/workflows/   ci.yml (lint+test on PRs), triage.yml (daily triage of demo/)
+.github/workflows/   ci.yml (lint+test on push/PR), triage.yml (dogfood: scans this
+                     repo on push/PR to main; PR jobs are read-only and gate on new
+                     exploitables, main jobs file issues + refresh the triage/main
+                     cache review PR)
 testdata/            real semgrep SARIF fixtures (pinned to unit-test line numbers)
-demo/                vulnerable-app/ (own go.mod; fixed, hand-written, intentionally
-                     vulnerable main.go). triage.yml scans + triages it, refreshes a
-                     review PR (verdict cache on the triage/demo branch), and files
-                     per-finding <TEST> issues that it auto-closes.
+                     + sampleapp/, the intentionally vulnerable smoke-test target
 ```
 
-Do not add findings-bearing source to `testdata/`: those paths are short-circuited
-to `benign` by the agent and their line numbers are pinned to unit tests. The demo's
-vulnerable app lives in `demo/` (outside `testdata/`) for exactly that reason.
+Do not add findings-bearing source to `testdata/` expecting it to be triaged:
+those paths are short-circuited to `benign` by the agent, excluded from the CI
+scan, and their line numbers are pinned to unit tests.
 
 ## Hard rules
 
 - **Agent tools are read-only**: `read_file`, `grep_repo` only. Never add write/exec
-  tools. Tool executor validates every path against repo root (no traversal),
-  caps read_file at 200 lines, caps grep at 50 matches with a "narrow your pattern"
-  suffix on truncation.
+  tools. Tool executor validates every path against repo root (no traversal) and
+  caps read_file lines and grep matches (defaults 200/50, scaled by the `-effort`
+  preset, always finite) with a "narrow your pattern" suffix on grep truncation.
 - **Verdicts are three-valued**: `benign | exploitable | uncertain`. `benign`
   requires cited evidence (file:line list). Budget exhaustion, parse failure,
   or any ambiguity → `uncertain`. Never default to `benign`.

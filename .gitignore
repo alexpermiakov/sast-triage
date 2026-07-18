@@ -35,11 +35,3 @@ go.work.sum
 /sast-triage
 /findings.sarif
 /triage-report.md
-
-# demo run artifacts — the vulnerable app (main.go) is committed by hand; these are
-# transient. triage.yml force-adds demo/triage-cache.json onto the triage/demo branch
-# for its review PR, but it stays ignored on main and for local runs.
-/demo-findings.sarif
-/demo-report.md
-/demo/triage-cache.json
-/demo/vulnerable-app/vulnerable-demo

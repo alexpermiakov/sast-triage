@@ -33,6 +33,8 @@ type Config struct {
 	MaxIterations    int // default 10
 	TokenBudget      int // per finding, input+output; default 60000
 	MaxTokensPerCall int // default 4096
+	MaxReadLines     int // per read_file call; default 200
+	MaxGrepMatches   int // per grep_repo call; default 50
 }
 
 // Triager runs one bounded loop per finding.
@@ -57,6 +59,12 @@ func New(client Client, repoRoot string, cfg Config) (*Triager, error) {
 	if cfg.MaxTokensPerCall <= 0 {
 		cfg.MaxTokensPerCall = 4096
 	}
+	if cfg.MaxReadLines > 0 {
+		exec.readLines = cfg.MaxReadLines
+	}
+	if cfg.MaxGrepMatches > 0 {
+		exec.grepMatches = cfg.MaxGrepMatches
+	}
 	return &Triager{client: client, exec: exec, root: repoRoot, cfg: cfg}, nil
 }
 
@@ -69,7 +77,7 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 		return v, nil
 	}
 
-	tools := toolDefs()
+	tools := toolDefs(t.exec.readLines, t.exec.grepMatches)
 	maxIter := t.cfg.MaxIterations
 	prompt := buildTriagePrompt(f)
 	if isContextFree(f) {

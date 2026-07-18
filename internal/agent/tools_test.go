@@ -74,6 +74,44 @@ func TestReadFileCapsAt200Lines(t *testing.T) {
 	}
 }
 
+func TestCustomCaps(t *testing.T) {
+	exec, _ := newTestExecutor(t)
+	exec.readLines = 100
+	exec.grepMatches = 10
+
+	out, err := run(t, exec, "read_file", map[string]any{"path": "big.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "100: line 100\n") || strings.Contains(out, "101: ") {
+		t.Error("read_file ignored the custom 100-line cap")
+	}
+	if !strings.Contains(out, "truncated at 100 lines") || !strings.Contains(out, "start_line=101") {
+		t.Errorf("truncation note must reflect the custom cap:\n%s", out)
+	}
+
+	out, err = run(t, exec, "grep_repo", map[string]any{"pattern": "^line "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(out, "big.go:"); got != 10 {
+		t.Errorf("got %d matches, want custom cap of 10", got)
+	}
+	if !strings.Contains(out, "truncated at 10 matches") {
+		t.Errorf("truncation note must reflect the custom cap:\n%s", out)
+	}
+}
+
+func TestToolDefsAdvertiseCaps(t *testing.T) {
+	defs := toolDefs(100, 25)
+	if !strings.Contains(defs[0].Description, "at most 100 lines") {
+		t.Errorf("read_file description = %q", defs[0].Description)
+	}
+	if !strings.Contains(defs[1].Description, "at most 25 matches") {
+		t.Errorf("grep_repo description = %q", defs[1].Description)
+	}
+}
+
 func TestReadFileErrors(t *testing.T) {
 	exec, root := newTestExecutor(t)
 	for name, args := range map[string]map[string]any{
@@ -136,8 +174,8 @@ func TestGrepRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Count(out, "big.go:"); got != maxGrepMatches {
-		t.Errorf("got %d matches, want cap of %d", got, maxGrepMatches)
+	if got := strings.Count(out, "big.go:"); got != defaultMaxGrepMatches {
+		t.Errorf("got %d matches, want cap of %d", got, defaultMaxGrepMatches)
 	}
 	if !strings.Contains(out, "narrow your pattern") {
 		t.Error("truncated grep must tell the model to narrow the pattern")

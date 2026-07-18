@@ -90,6 +90,9 @@ func TestRunFullThenIncremental(t *testing.T) {
 	if s.Cached != 0 || s.Fresh != 3 {
 		t.Errorf("cache accounting = %+v", s)
 	}
+	if s.NewExploitable != 1 {
+		t.Errorf("NewExploitable = %d, want 1 (fresh exploitable verdicts trip the PR gate)", s.NewExploitable)
+	}
 	if s.IssuesFiled != 1 || len(issues.titles) != 1 || !strings.Contains(issues.titles[0], "app/handlers.go:17") {
 		t.Errorf("issues = %+v, summary %+v", issues.titles, s)
 	}
@@ -131,6 +134,9 @@ func TestRunFullThenIncremental(t *testing.T) {
 	}
 	if s2.Cached != 3 || s2.Fresh != 0 || s2.TokensUsed != 0 {
 		t.Errorf("incremental summary = %+v", s2)
+	}
+	if s2.NewExploitable != 0 {
+		t.Errorf("NewExploitable = %d on a cached run; cache hits must never trip the PR gate", s2.NewExploitable)
 	}
 	if len(issues2.titles) != 0 {
 		t.Errorf("issue filed twice: %v", issues2.titles)

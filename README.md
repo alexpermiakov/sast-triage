@@ -1,11 +1,13 @@
 # sast-triage
 
-Automated triage for SAST findings: a bounded, read-only LLM agent does the
-work a junior security analyst would — opens the flagged file, traces the
-input, checks sanitization and reachability — and delivers a verdict with
-cited evidence. Verdicts live in a git-committed, PR-reviewable cache keyed to
-the code they were decided on, so each finding is paid for once and re-triaged
-only when the relevant code actually changes.
+**An LLM agent that triages your SAST findings — bounded, read-only, and
+fail-closed — with verdicts cached in git and reviewed by PR.**
+
+SAST scanners emit findings nobody triages. Most are false positives; small
+teams have no security staff and large ones have backlogs. The missing work is
+what a junior security analyst does: open the flagged file, trace the input,
+check sanitization and reachability, deliver a verdict with evidence.
+`sast-triage` automates exactly that — and nothing more.
 
 ```
 findings.sarif ─► INGEST ─► CACHE ─► TRIAGE (agent) ─► REPORT + CACHE PR + ISSUES
@@ -14,68 +16,32 @@ findings.sarif ─► INGEST ─► CACHE ─► TRIAGE (agent) ─► REPORT + 
                             verdicts  new finding
 ```
 
-Deterministic pipeline, exactly one nondeterministic stage — and the LLM gets
-judgment, never control.
+Deterministic pipeline, exactly one nondeterministic stage — the LLM gets
+judgment, never control:
 
-## How it works
+- **Two tools, both read-only**: `read_file` and `grep_repo`, path-validated
+  against the repo root (no traversal, no symlinks out, no writes, no exec).
+- **Three-valued verdicts**: `benign | exploitable | uncertain`. `benign`
+  requires cited `file:line` evidence that the tool re-verifies; every failure
+  mode — budget exhaustion, malformed output, ambiguity — lands on
+  `uncertain`. Nothing defaults to safe.
+- **Everything is bounded**: iteration cap and token budget per finding, a
+  findings cap per run, output caps per tool call.
+- **Verdicts are cached in git, keyed to the evidence**: a cache hit requires
+  the finding's fingerprint *and* a matching hash over the flagged region plus
+  every line the verdict cited. Touch any line a verdict relied on and it
+  expires. Suppression is keyed to the evidence, not the finding.
 
-- **Ingest** — parses SARIF 2.1.0 from `semgrep scan --sarif --dataflow-traces`,
-  including the taint trace, and sorts findings by security-severity so budget
-  goes to the scary ones first.
-- **Cache** — `triage-cache.json`, committed to git. A hit requires the
-  fingerprint *and* a matching `codeHash` computed over the flagged region plus
-  every evidence region the verdict cited. Suppression is keyed to the
-  evidence, not the finding: touch any line a verdict relied on and it expires.
-- **Triage** — one agent loop per new finding, parallelized. Two tools only,
-  both read-only and repo-rooted: `read_file` (≤200 lines) and `grep_repo`
-  (≤50 matches). Hard iteration cap, per-finding token budget, run-level
-  `-max-findings-budget`. Verdicts are three-valued:
-  - `benign` — requires cited `file:line` evidence; unverifiable evidence
-    downgrades to uncertain. Never the default.
-  - `exploitable` — also routed to GitHub Issues (deduped via the cache).
-  - `uncertain` — every failure mode lands here: budget exhaustion, malformed
-    verdicts, ambiguity. Fail-closed.
-- **Report** — `triage-report.md` sorted by required human scrutiny: proposed
-  suppressions first with clickable evidence (veto is a 30-second action),
-  then exploitable, then uncertain. PRs approve suppressions; issues own
-  vulnerabilities.
+## 60-second demo
 
-Prompt-injection posture: repo content is evidence, never instructions. A
-comment claiming code is safe does not meet the evidence bar for `benign`.
-The worst case for a fooled model is a wrong verdict — and the dangerous
-direction (false benign) demands the most proof and auto-expires on any
-evidence drift.
-
-## Install
+The repo ships a tiny intentionally-vulnerable sample app under
+`testdata/sampleapp/` with a matching SARIF fixture, so you can watch a full
+triage run without installing a scanner. You need Go and an
+[Anthropic API key](https://console.anthropic.com):
 
 ```bash
-go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
-# or, from a checkout:
-go build -o sast-triage ./cmd/sast-triage
-```
-
-You also need [semgrep](https://semgrep.dev) to produce the findings:
-`brew install semgrep` or `pipx install semgrep`.
-
-## Run locally
-
-You need an Anthropic API key: create one in the
-[Anthropic Console](https://console.anthropic.com) under **API Keys**
-(requires an account with billing enabled). Put it in a gitignored `.env`:
-
-```bash
-# .env
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-### Smoke test with the bundled sample app
-
-The repo ships a tiny intentionally-vulnerable app under `testdata/sampleapp/`
-and a matching SARIF fixture, so you can watch a full triage run without
-installing semgrep — only the API key is needed:
-
-```bash
-set -a; source .env; set +a
+git clone https://github.com/alexpermiakov/sast-triage && cd sast-triage
+export ANTHROPIC_API_KEY=sk-ant-...
 
 go run ./cmd/sast-triage \
   -sarif testdata/findings.sarif \
@@ -87,162 +53,151 @@ cat /tmp/demo-report.md
 ```
 
 Three findings go in: a SQL injection with a taint trace (the agent reads the
-handler and should confirm it **exploitable**), a hardcoded password (decided
-in a single call from the snippet), and a finding inside `_test.go`
-(short-circuited to **benign** by pure rule, no LLM call). Run it twice — the
-second run is all cache hits and costs zero tokens.
+handler and confirms it), a hardcoded credential (decided in a single call
+from the snippet — no tools needed), and a finding inside `_test.go`
+(short-circuited to `benign` by pure rule, zero LLM calls). Run it twice —
+the second run is all cache hits and costs zero tokens.
 
-### Triage a real repository
+Real output from that exact run (~5,800 tokens total):
 
-`sast-triage` does not run the scanner itself — semgrep produces
-`findings.sarif`, and `-repo` must point at the same root semgrep scanned so
-file paths line up:
+> # SAST triage report
+>
+> 3 findings — **1 benign** (proposed suppressions), **2 exploitable**, **0
+> uncertain**. 0 from cache, 3 newly triaged (5766 tokens).
+>
+> ## Exploitable
+>
+> ### `app/handlers.go:17` — `go.lang.security.audit.database.string-formatted-query`
+>
+> - Severity: 8.6 (error) · verdict source: new
+> - Reason: The handler reads `id` directly from the HTTP request query
+>   parameters (`r.URL.Query().Get("id")`) with no validation or escaping,
+>   formats it directly into a SQL query string via `fmt.Sprintf`, and passes
+>   the fully-formatted string to `s.db.QueryRow(query)` which executes it as
+>   raw SQL. There is no parameterized query […] An attacker can supply a
+>   malicious `id` value (e.g. `1 OR 1=1` or a UNION-based payload) to alter
+>   the query semantics.
+> - Evidence: `app/handlers.go:16`, `app/handlers.go:17`, `app/handlers.go:18`
+
+The report is sorted by required human scrutiny: proposed suppressions first
+(veto must be a 30-second action), then exploitable, then uncertain.
+
+## Use it on your repository
+
+`sast-triage` doesn't run the scanner. Anything that emits SARIF 2.1.0 with
+stable fingerprints works; [semgrep](https://semgrep.dev) is what's tested:
 
 ```bash
-cd /path/to/target-repo
-
+cd /path/to/your-repo
 semgrep scan --config auto --sarif --dataflow-traces --output findings.sarif
 
-set -a; source /path/to/.env; set +a
 sast-triage -sarif findings.sarif -repo . -cache triage-cache.json -report triage-report.md
 ```
 
-Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this),
-GitHub issues if you pass `-create-issues` with `GITHUB_TOKEN` set. Exit code
-is 0 unless the tool itself fails.
+Install: `go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest`
 
-Useful flags (`sast-triage -h` for all):
+Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this),
+GitHub issues for exploitable findings if you pass `-create-issues`.
+
+### Flags
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
+| `-effort` | `medium` | depth per finding: `small` / `medium` / `large` (see below) |
+| `-max-findings-budget` | `50` | breadth per run: findings triaged by LLM; overflow deferred to the next run (0 = unlimited) |
+| `-fail-on-new-exploitable` | off | exit 3 if this run *decides* any finding exploitable; cache hits never trip it — the PR gate |
 | `-model` | `claude-sonnet-5` | Anthropic model used for triage |
-| `-max-iterations` | `10` | agent loop cap per finding |
-| `-token-budget` | `60000` | token budget per finding |
-| `-max-findings-budget` | `50` | LLM-triaged findings per run; overflow deferred as uncertain |
 | `-parallel` | `4` | findings triaged concurrently |
+| `-create-issues` | off | file GitHub issues for exploitable findings (needs `GITHUB_TOKEN`) |
 | `-link-base` | — | e.g. `https://github.com/owner/repo/blob/<sha>` for clickable evidence |
-| `-create-issues` | off | file GitHub issues for exploitable findings |
 
-The first run on an existing codebase converts the whole backlog into
-evidence-backed verdicts — review that PR once, closely. Every run after is
-incremental: cache hits dominate and LLM cost drops ~99%.
+`-effort` scales how deep the agent digs **per finding**; it never removes a
+bound, only moves it:
 
-## Triaging your own repository
+| | read_file lines | grep matches | token budget | iterations |
+| --- | --- | --- | --- | --- |
+| `small` | 100 | 25 | 30k | 6 |
+| `medium` | 200 | 50 | 60k | 10 |
+| `large` | 400 | 100 | 120k | 15 |
 
-This repo runs a single [`triage` workflow](.github/workflows/triage.yml) against the
-bundled demo app (see [Proof of life](#proof-of-life-a-self-triaging-demo) below). To
-triage your **own** code nightly, adapt the template below — it scans your source
-instead of the demo app.
+(`-token-budget` and `-max-iterations` override the preset individually.
+Counterintuitively, *smaller* is not always cheaper: the agent re-sends the
+conversation each turn, so many small reads can cost more than one big one —
+`small` is for small services, `large` for sprawling codebases where taint
+paths cross many files.)
 
-Add the secret first: **Settings → Secrets and variables → Actions → New repository
-secret** → `ANTHROPIC_API_KEY` (`GITHUB_TOKEN` is provided automatically), and enable
-**Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to
-create and approve pull requests"** so the run can open the PR.
+## Run it in CI
 
-```yaml
-name: nightly-triage
-on:
-  schedule:
-    - cron: "0 2 * * *"
-  workflow_dispatch: {} # first run / manual
+This repo triages itself: [`triage.yml`](.github/workflows/triage.yml) is
+both the live deployment and the template — copy it into your repo, add the
+`ANTHROPIC_API_KEY` secret, and enable *Settings → Actions → General → "Allow
+GitHub Actions to create and approve pull requests"*.
 
-concurrency:
-  group: nightly-triage
-  cancel-in-progress: false
+- **On pull requests**: scan + triage against the verdict cache committed on
+  main. The check fails **only if the PR introduces a new exploitable
+  finding** — pre-existing backlog never blocks a PR, and cache hits never
+  re-bill. The PR job runs with read-only permissions; the report lands in
+  the job summary.
+- **On push to main**: full run — exploitable findings become GitHub issues
+  (deduped through the cache, so never filed twice), and when the verdict
+  cache changed, the workflow refreshes **one** review PR carrying the cache
+  delta with the report as its body. *PRs approve suppressions; issues own
+  vulnerabilities* — approving a suppression is a code review, with the
+  evidence one click away.
 
-permissions:
-  contents: read
+Conventions worth keeping if you adapt it: actions pinned by SHA (this is a
+security tool), default-deny `permissions:` with per-job elevation, a
+`concurrency` group so runs can't race on the cache, and no write permissions
+of any kind on PR-triggered jobs. To make human approval of triage PRs
+mandatory rather than customary, use a GitHub App token and require reviews
+via branch protection.
 
-jobs:
-  triage:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: stable
+## Cost, and what the first run looks like
 
-      - run: go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
-      # semgrep from its official image, pinned by digest (avoids the
-      # pipx/pkg_resources breakage on Python 3.12 runners).
-      - name: Scan
-        run: |
-          docker run --rm -v "$PWD:/src" -w /src \
-            semgrep/semgrep@sha256:a9ea2d5621c29d815d90c2a3b2f9571da8972ef4ff855c9e4902681730240e35 \
-            semgrep scan --config auto --sarif --dataflow-traces --output findings.sarif
+The first run on an existing codebase is the expensive one: every finding is
+new. It is bounded on two axes — `-max-findings-budget` (default 50 findings
+per run, severity-sorted so the scariest go first) and the per-finding token
+budget (60k on `medium`, though typical findings resolve in 2–6k). Overflow
+findings are *deferred*, reported as such, and picked up by the next run with
+a fresh budget — so a large backlog converts over a few runs without any
+babysitting, or in one run if you raise the cap.
 
-      - name: Triage
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          sast-triage -sarif findings.sarif -repo . -create-issues \
-            -github-repo "${{ github.repository }}" \
-            -link-base "https://github.com/${{ github.repository }}/blob/${{ github.sha }}"
+Every run after that is incremental: verdicts are cache hits until the code
+they cite actually changes. In practice LLM cost drops ~99% after bootstrap.
 
-      - name: Open cache PR
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [ -z "$(git status --porcelain -- triage-cache.json)" ]; then exit 0; fi
-          BRANCH="triage/nightly-$(date -u +%Y%m%d)"
-          git config user.name "sast-triage-bot"
-          git config user.email "sast-triage-bot@users.noreply.github.com"
-          git checkout -B "$BRANCH"
-          git add triage-cache.json
-          git commit -m "chore(triage): nightly verdict cache update [skip ci]"
-          git push -f origin "$BRANCH"
-          gh pr create --head "$BRANCH" \
-            --title "Nightly SAST triage: $(date -u +%Y-%m-%d)" \
-            --body-file triage-report.md
-```
+## FAQ
 
-Conventions worth keeping: pin actions by SHA (this is a security tool),
-default-deny `permissions:` with per-job elevation, and a `concurrency` group
-so overlapping runs can't race on the cache. To make human approval of triage
-PRs mandatory rather than customary, use a GitHub App token instead of
-`github.token` and require reviews via branch protection.
+**What stops prompt injection — a comment saying "this is safe"?**
+Repo content enters the prompt as evidence, never as instructions, and the
+system prompt says so. Prose claims of safety don't meet the evidence bar for
+`benign`: the verdict must cite `file:line` refs, which the tool re-verifies
+against the actual files. The worst case for a fooled model is a wrong
+verdict — and the dangerous direction (false `benign`) demands the most
+proof, is PR-reviewed by a human, and auto-expires when any cited line
+changes. I didn't make the model reliable; I made the system safe under an
+unreliable model.
 
-## Proof of life: a self-triaging demo
+**Why commit the cache to git?**
+Compared to `.semgrepignore`/`nosemgrep`: per-finding granularity,
+non-destructive (verdicts, not deletions), carries reason + evidence +
+timestamps, and the PR diff is the audit trail. The agent's memory is
+version-controlled and human-reviewed.
 
-`demo/vulnerable-app/` is a small, fixed, deliberately vulnerable Go app (**do not
-deploy it**), kept in its own Go module so it never touches the main build or tests.
-Its `main.go` has a handful of real bugs on purpose — SQL injection (with a taint
-trace), command injection, SSRF, and a hardcoded credential — so a triage run always
-has something to find.
+**Does it only work with semgrep?**
+It consumes SARIF 2.1.0, not semgrep. It expects stable result fingerprints
+(semgrep's `matchBasedId`) and uses dataflow traces when present. Other
+scanners' SARIF should adapt in ingest (`internal/sarif`) — scanner quirks
+are a parsing problem, not a prompting problem.
 
-The [`triage` workflow](.github/workflows/triage.yml) runs it end to end: scan the app
-with semgrep, triage the findings with the bounded agent, then exercise both output
-paths — it opens (and refreshes) **one review PR** carrying the verdict cache, and files
-a GitHub **issue per `exploitable` finding**. Expect the agent to trace the query
-parameter into the SQL sink and call it `exploitable`, decide the hardcoded credential
-from the snippet alone, and cite `file:line` evidence for each.
+**Can I use OpenAI / Gemini instead of Claude?**
+The loop talks to a one-method `Client` interface
+([`internal/agent/client.go`](internal/agent/client.go)); the Anthropic SDK
+is one implementation of it. A provider swap is one new file.
 
-Because it's a *demo* on a public repo, two things differ from a real deployment: each
-run starts from an **empty cache** so it always produces output (a real run keeps the
-cache to skip repeat work), and the filed issues are title-prefixed `<TEST>` and
-**auto-closed** at the end of the run — the issue flow is demonstrated without leaving
-open "vulnerabilities" on the repo. The app itself is committed by hand; the only thing
-the workflow commits is the verdict cache, onto the `triage/demo` branch for the PR.
-
-The workflow needs the `ANTHROPIC_API_KEY` secret and the repo setting **Settings →
-Actions → General → "Allow GitHub Actions to create and approve pull requests."** It
-scans only `demo/vulnerable-app`; `testdata/` holds the frozen unit-test fixtures
-(pinned to test assertions, auto-short-circuited to benign) and is never scanned.
-
-Preview a run locally:
-
-```bash
-semgrep scan --config auto --sarif --dataflow-traces --output demo.sarif demo/vulnerable-app
-
-set -a; source .env; set +a
-sast-triage -sarif demo.sarif -repo . -cache /tmp/triage-cache.json -report demo-report.md
-cat demo-report.md
-```
+**Why not let the agent write the fix?**
+Scope. Triage is a judgment task with a verifiable output contract; that's
+what an LLM can be safely bounded to. Write access would turn a wrong verdict
+into a wrong commit.
 
 ## Development
 

@@ -30,11 +30,13 @@ type Config struct {
 	RepoRoot   string
 	ReportPath string
 
-	Model         string
-	MaxIterations int
-	TokenBudget   int // per finding
-	MaxFindings   int // run-level cap on LLM-triaged findings; overflow deferred
-	Parallel      int
+	Model          string
+	MaxIterations  int
+	TokenBudget    int // per finding
+	MaxFindings    int // run-level cap on LLM-triaged findings; overflow deferred
+	MaxReadLines   int // per read_file call; 0 → agent default
+	MaxGrepMatches int // per grep_repo call; 0 → agent default
+	Parallel       int
 
 	LinkBase         string
 	IssueLabel       string
@@ -49,6 +51,7 @@ type Config struct {
 type Summary struct {
 	Total, Benign, Exploitable, Uncertain int
 	Cached, Fresh, Deferred               int
+	NewExploitable                        int // exploitable verdicts decided this run (not cache hits)
 	TokensUsed                            int
 	IssuesFiled                           int
 }
@@ -109,7 +112,9 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 			// Deferred, NOT cached: next run gets a fresh budget for these.
 			items = append(items, deferredItem(f, cfg.MaxFindings))
 		}
+		deferred := len(llmQueue) - cfg.MaxFindings
 		llmQueue = llmQueue[:cfg.MaxFindings]
+		fmt.Fprintf(cfg.Log, "%d findings deferred — re-run to continue (completed verdicts are cached and free) or raise -max-findings-budget\n", deferred)
 	}
 
 	if len(llmQueue) > 0 {
@@ -117,9 +122,11 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 			return Summary{}, fmt.Errorf("%d findings need triage but no LLM client is configured (set ANTHROPIC_API_KEY)", len(llmQueue))
 		}
 		triager, err := agent.New(cfg.Client, cfg.RepoRoot, agent.Config{
-			Model:         cfg.Model,
-			MaxIterations: cfg.MaxIterations,
-			TokenBudget:   cfg.TokenBudget,
+			Model:          cfg.Model,
+			MaxIterations:  cfg.MaxIterations,
+			TokenBudget:    cfg.TokenBudget,
+			MaxReadLines:   cfg.MaxReadLines,
+			MaxGrepMatches: cfg.MaxGrepMatches,
 		})
 		if err != nil {
 			return Summary{}, err
@@ -143,15 +150,17 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 			close(results)
 		}()
 
+		done := 0
 		for o := range results {
+			done++
 			if o.err != nil {
 				// Transport failure: report uncertain but never cache it —
 				// a flaky API call is not a fact about the code.
-				fmt.Fprintf(cfg.Log, "triage error for %s: %v\n", o.finding.Location(), o.err)
+				fmt.Fprintf(cfg.Log, "[%d/%d] triage error for %s: %v\n", done, len(llmQueue), o.finding.Location(), o.err)
 				items = append(items, uncachedUncertain(o.finding, fmt.Sprintf("triage failed: %v", o.err)))
 				continue
 			}
-			fmt.Fprintf(cfg.Log, "%s → %s (%d tokens)\n", o.finding.Location(), o.verdict.Verdict, o.verdict.TokensUsed)
+			fmt.Fprintf(cfg.Log, "[%d/%d] %s → %s (%d tokens)\n", done, len(llmQueue), o.finding.Location(), o.verdict.Verdict, o.verdict.TokensUsed)
 			mergeVerdict(c, cfg, o.finding, o.verdict, &items)
 		}
 	}
@@ -282,6 +291,9 @@ func summarize(items []report.Item) Summary {
 			s.Benign++
 		case agent.VerdictExploitable:
 			s.Exploitable++
+			if !it.Cached {
+				s.NewExploitable++
+			}
 		default:
 			s.Uncertain++
 		}

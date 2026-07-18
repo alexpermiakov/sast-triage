@@ -2,7 +2,9 @@
 // evidence-keyed suppression cache. This file is flag parsing, wiring, and
 // exit codes only; all logic lives in internal/.
 //
-// Exit codes: 0 success (whatever the verdicts), 1 tool failure, 2 usage error.
+// Exit codes: 0 success (whatever the verdicts), 1 tool failure, 2 usage
+// error, 3 gate tripped (-fail-on-new-exploitable and this run produced new
+// exploitable verdicts).
 package main
 
 import (
@@ -25,8 +27,9 @@ func main() {
 		repoRoot         = flag.String("repo", ".", "repository root the findings refer to")
 		reportPath       = flag.String("report", "triage-report.md", "markdown report output")
 		model            = flag.String("model", "claude-sonnet-5", "Anthropic model for triage")
-		maxIter          = flag.Int("max-iterations", 10, "agent loop iteration cap per finding")
-		tokenBudget      = flag.Int("token-budget", 60000, "token budget per finding (input+output)")
+		effort           = flag.String("effort", "medium", "triage depth per finding: small|medium|large (scales read/grep caps, token budget, iterations)")
+		maxIter          = flag.Int("max-iterations", 10, "agent loop iteration cap per finding (overrides -effort)")
+		tokenBudget      = flag.Int("token-budget", 60000, "token budget per finding, input+output (overrides -effort)")
 		maxFindings      = flag.Int("max-findings-budget", 50, "max findings triaged by LLM per run; overflow deferred as uncertain (0 = unlimited)")
 		parallel         = flag.Int("parallel", 4, "findings triaged concurrently")
 		linkBase         = flag.String("link-base", "", "base URL for clickable evidence links, e.g. https://github.com/owner/repo/blob/<sha>")
@@ -34,8 +37,25 @@ func main() {
 		githubRepo       = flag.String("github-repo", os.Getenv("GITHUB_REPOSITORY"), "owner/name for issue creation")
 		issueLabel       = flag.String("issue-label", "security/triage-confirmed", "label for filed issues")
 		issueTitlePrefix = flag.String("issue-title-prefix", "", "prefix prepended to filed issue titles, e.g. \"<TEST> \"")
+		failOnNewExpl    = flag.Bool("fail-on-new-exploitable", false, "exit 3 if this run decides any finding exploitable (cache hits never trip it) — for PR gating")
 	)
 	flag.Parse()
+
+	eff, err := pipeline.EffortPreset(*effort)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sast-triage: %v\n", err)
+		os.Exit(2)
+	}
+	// The preset supplies token budget and iteration cap unless the individual
+	// flag was set explicitly.
+	explicit := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	if !explicit["token-budget"] {
+		*tokenBudget = eff.TokenBudget
+	}
+	if !explicit["max-iterations"] {
+		*maxIter = eff.MaxIterations
+	}
 
 	cfg := pipeline.Config{
 		SARIFPath:        *sarifPath,
@@ -46,6 +66,8 @@ func main() {
 		MaxIterations:    *maxIter,
 		TokenBudget:      *tokenBudget,
 		MaxFindings:      *maxFindings,
+		MaxReadLines:     eff.MaxReadLines,
+		MaxGrepMatches:   eff.MaxGrepMatches,
 		Parallel:         *parallel,
 		LinkBase:         *linkBase,
 		IssueLabel:       *issueLabel,
@@ -75,4 +97,8 @@ func main() {
 	}
 	fmt.Printf("triaged %d findings: %d benign, %d exploitable, %d uncertain (%d cached, %d new, %d deferred, %d tokens, %d issues filed)\n",
 		s.Total, s.Benign, s.Exploitable, s.Uncertain, s.Cached, s.Fresh, s.Deferred, s.TokensUsed, s.IssuesFiled)
+	if *failOnNewExpl && s.NewExploitable > 0 {
+		fmt.Fprintf(os.Stderr, "sast-triage: %d new exploitable finding(s) this run — failing the gate\n", s.NewExploitable)
+		os.Exit(3)
+	}
 }

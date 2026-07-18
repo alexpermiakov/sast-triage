@@ -13,15 +13,18 @@ import (
 )
 
 const (
-	maxReadLines   = 200
-	maxGrepMatches = 50
-	maxGrepFileSz  = 1 << 20 // skip files over 1 MiB; generated blobs, not evidence
+	defaultMaxReadLines   = 200
+	defaultMaxGrepMatches = 50
+	maxGrepFileSz         = 1 << 20 // skip files over 1 MiB; generated blobs, not evidence
 )
 
 // ToolExecutor runs the agent's two read-only tools. Every path is validated
 // against the repo root: no absolute paths, no traversal, no symlink escapes.
+// Output caps are configurable (effort presets) but always finite.
 type ToolExecutor struct {
-	root string // absolute, symlink-resolved
+	root        string // absolute, symlink-resolved
+	readLines   int    // max lines per read_file call
+	grepMatches int    // max matches per grep_repo call
 }
 
 func NewToolExecutor(repoRoot string) (*ToolExecutor, error) {
@@ -33,7 +36,11 @@ func NewToolExecutor(repoRoot string) (*ToolExecutor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tool executor root: %w", err)
 	}
-	return &ToolExecutor{root: resolved}, nil
+	return &ToolExecutor{
+		root:        resolved,
+		readLines:   defaultMaxReadLines,
+		grepMatches: defaultMaxGrepMatches,
+	}, nil
 }
 
 // Execute dispatches one tool call. Errors are returned to the model as
@@ -83,7 +90,7 @@ func (e *ToolExecutor) readFile(p string, startLine int) (string, error) {
 	if startLine > len(lines) {
 		return "", fmt.Errorf("read_file %s: start_line %d beyond end of file (%d lines)", p, startLine, len(lines))
 	}
-	end := startLine + maxReadLines - 1
+	end := startLine + e.readLines - 1
 	if end > len(lines) {
 		end = len(lines)
 	}
@@ -94,7 +101,7 @@ func (e *ToolExecutor) readFile(p string, startLine int) (string, error) {
 	}
 	if end < len(lines) {
 		fmt.Fprintf(&b, "[truncated at %d lines; file has %d — call read_file again with start_line=%d]\n",
-			maxReadLines, len(lines), end+1)
+			e.readLines, len(lines), end+1)
 	}
 	return b.String(), nil
 }
@@ -144,7 +151,7 @@ func (e *ToolExecutor) grepRepo(pattern, glob string) (string, error) {
 			if !re.MatchString(line) {
 				continue
 			}
-			if matches >= maxGrepMatches {
+			if matches >= e.grepMatches {
 				truncated = true
 				return filepath.SkipAll
 			}
@@ -160,7 +167,7 @@ func (e *ToolExecutor) grepRepo(pattern, glob string) (string, error) {
 		return "no matches\n", nil
 	}
 	if truncated {
-		fmt.Fprintf(&b, "[truncated at %d matches — narrow your pattern]\n", maxGrepMatches)
+		fmt.Fprintf(&b, "[truncated at %d matches — narrow your pattern]\n", e.grepMatches)
 	}
 	return b.String(), nil
 }
@@ -199,13 +206,14 @@ func (e *ToolExecutor) resolve(p string) (string, error) {
 	return resolved, nil
 }
 
-// toolDefs declares the agent's read-only tools.
-func toolDefs() []ToolDef {
+// toolDefs declares the agent's read-only tools, with the executor's actual
+// caps in the descriptions so the model knows when to page or narrow.
+func toolDefs(readLines, grepMatches int) []ToolDef {
 	return []ToolDef{
 		{
 			Name: "read_file",
-			Description: "Read a file from the repository with line numbers. " +
-				"Returns at most 200 lines per call; page with start_line.",
+			Description: fmt.Sprintf("Read a file from the repository with line numbers. "+
+				"Returns at most %d lines per call; page with start_line.", readLines),
 			Properties: map[string]any{
 				"path":       map[string]any{"type": "string", "description": "Repo-relative file path."},
 				"start_line": map[string]any{"type": "integer", "description": "1-based first line to read (default 1)."},
@@ -214,8 +222,8 @@ func toolDefs() []ToolDef {
 		},
 		{
 			Name: "grep_repo",
-			Description: "Search file contents across the repository with a Go (RE2) regular expression. " +
-				"Returns matching lines as path:line: text, at most 50 matches.",
+			Description: fmt.Sprintf("Search file contents across the repository with a Go (RE2) regular expression. "+
+				"Returns matching lines as path:line: text, at most %d matches.", grepMatches),
 			Properties: map[string]any{
 				"pattern": map[string]any{"type": "string", "description": "RE2 regular expression matched per line."},
 				"glob":    map[string]any{"type": "string", "description": "Optional glob filter: match base names (*.go) or full repo-relative paths (internal/*/handlers.go)."},

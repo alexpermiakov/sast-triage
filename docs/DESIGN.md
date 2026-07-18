@@ -144,6 +144,34 @@ runs are incremental (cache hits dominate; LLM cost drops ~99%).
 - One intentionally vulnerable sample endpoint lives in the demo apps so the
   public nightly run always has something real to triage (proof-of-life).
 
+## Amendments (2026-07-18)
+
+Scope changes since v1 acceptance, recorded per the header rule:
+
+- **Per-PR trigger mode is IN scope** (was explicitly out of v1; owner
+  decision). Flag: `-fail-on-new-exploitable` → exit code 3 when the run
+  *decides* any finding exploitable. Cache hits never trip the gate: the
+  committed cache is the baseline, so pre-existing backlog cannot block a PR —
+  only what the PR introduces. Nightly-mode exit-0 semantics are unchanged
+  when the flag is absent.
+- **The demo app (`demo/vulnerable-app`) is removed.** The repo now dogfoods
+  itself: `triage.yml` scans this codebase (excluding `testdata/`) on push and
+  PR to main. Push-to-main runs file real issues and refresh one review PR
+  (`triage/main`) carrying the cache delta; PR runs are read-only-permission
+  jobs that gate on new exploitables. Proof-of-life is the `testdata/`
+  smoke-test fixture plus a captured report excerpt in the README. The
+  "sample endpoint in the demo apps" line in Testing strategy is superseded.
+- **Tool output caps are preset-scaled, still hard-bounded.** `-effort
+  small|medium|large` scales read_file lines (100/200/400), grep matches
+  (25/50/100), per-finding token budget (30k/60k/120k), and iteration cap
+  (6/10/15). Medium = the original constants and remains the default;
+  explicit `-token-budget`/`-max-iterations` override the preset. No preset
+  removes a bound. Tool descriptions advertise the active caps.
+- **Scanner portability stance:** differences between SAST tools (fingerprint
+  schemes, trace formats, severity mapping) are deterministic ingest concerns
+  for `internal/sarif` — per-tool adapters are the v2 path. No per-tool
+  prompt/skill files; the agent judges code, not scanner output.
+
 ## Key one-liners (rationale record)
 
 - "Deterministic pipeline with a bounded, read-only agent loop in the triage
