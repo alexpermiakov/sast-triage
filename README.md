@@ -31,7 +31,43 @@ graph LR
 
 ## Quick Start: CI
 
-CI is the main use case, and by default it runs a **local** model — no API key, no secrets, no source leaving the runner. Drop this into `.github/workflows/triage.yml`:
+One job: your scanner produces `findings.sarif`, `sast-triage` reads the code behind each finding, and the PR fails only on **new exploitable** ones. Pick a model — the tool is identical, only the flags change:
+
+<details open>
+<summary><b>Claude</b> — best verdicts; what this repo runs on itself</summary>
+
+Add an `ANTHROPIC_API_KEY` repo secret, then drop this into `.github/workflows/triage.yml`:
+
+```yaml
+name: Triage
+on: [pull_request]
+permissions:
+  contents: read
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with: { go-version: stable }
+      - run: GOBIN=/usr/local/bin go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
+
+      # → produce findings.sarif with your scanner here (opengrep example below ⬇)
+
+      - name: Triage — fail only on NEW exploitable findings
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          sast-triage -provider anthropic -sarif findings.sarif -repo . \
+            -fail-on-new-exploitable
+```
+
+</details>
+
+<details>
+<summary><b>Local model</b> (OpenAI-compatible) — no API key, no cost, nothing leaves the runner</summary>
+
+Same job with an Ollama service instead of a secret:
 
 ```yaml
 name: Triage
@@ -52,13 +88,7 @@ jobs:
       - run: GOBIN=/usr/local/bin go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
       - run: curl -fsS http://localhost:11434/api/pull -d '{"name":"qwen2.5-coder:7b"}'
 
-      - name: Scan with opengrep → findings.sarif
-        run: |
-          curl -fsSLo /usr/local/bin/opengrep \
-            https://github.com/opengrep/opengrep/releases/download/v1.25.0/opengrep_manylinux_x86
-          chmod +x /usr/local/bin/opengrep
-          git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
-          opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
+      # → produce findings.sarif with your scanner here (opengrep example below ⬇)
 
       - name: Triage — fail only on NEW exploitable findings
         run: |
@@ -67,9 +97,28 @@ jobs:
             -fail-on-new-exploitable
 ```
 
-Prefer Claude (or any hosted model)? Add `-provider anthropic` with an `ANTHROPIC_API_KEY` secret, or `-base-url https://api.openai.com/v1` with `OPENAI_API_KEY` — the tool is the same, only the endpoint changes.
+The same two flags point at any OpenAI-compatible endpoint — vLLM, LM Studio, or OpenAI itself (`-base-url https://api.openai.com/v1` + `OPENAI_API_KEY`). Small local models are honest but cautious: verdicts are fail-closed, so expect more `uncertain` and fewer confident `benign` calls than with Claude.
 
-Swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules). Want to see the output first? This repo's [open alerts](https://github.com/alexpermiakov/sast-triage/security/code-scanning) and [issues](https://github.com/alexpermiakov/sast-triage/issues) come from [`demo/`](demo/) — intentionally vulnerable code we keep unfixed so the pipeline's real output is always on display. For production, use the [workflow this repo runs on itself](.github/workflows/triage.yml): everything pinned (actions by SHA, opengrep by sha256, rules by commit), plus a push-to-main job that files issues for exploitables, uploads triaged results to the Security tab, and maintains the cache review PR — merging that PR is what makes later runs cache hits.
+</details>
+
+<details>
+<summary><b>The scan step</b> — producing <code>findings.sarif</code> with opengrep</summary>
+
+Any scanner that emits SARIF 2.1.0 works; opengrep is what's tested. Paste this where the workflow says "your scanner here", and swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules):
+
+```yaml
+      - name: Scan with opengrep → findings.sarif
+        run: |
+          curl -fsSLo /usr/local/bin/opengrep \
+            https://github.com/opengrep/opengrep/releases/download/v1.25.0/opengrep_manylinux_x86
+          chmod +x /usr/local/bin/opengrep
+          git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
+          opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
+```
+
+</details>
+
+Want to see real output before wiring anything up? This repo's [open alerts](https://github.com/alexpermiakov/sast-triage/security/code-scanning) and [issues](https://github.com/alexpermiakov/sast-triage/issues) come from [`demo/`](demo/) — intentionally vulnerable code we keep unfixed so the pipeline's real output is always on display. For production, copy the [workflow this repo runs on itself](.github/workflows/triage.yml): everything pinned (actions by SHA, opengrep by sha256, rules by commit), a per-run model picker (Anthropic or any OpenAI-compatible endpoint via `workflow_dispatch`), plus a push-to-main job that files issues for exploitables, uploads triaged results to the Security tab, and maintains the cache review PR — merging that PR is what makes later runs cache hits.
 
 ## Run it directly
 
