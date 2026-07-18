@@ -79,7 +79,7 @@ scan, and their line numbers are pinned to unit tests.
 ## Style
 
 - Standard library first; allowed deps: anthropic-sdk-go, go-sarif (or hand-rolled
-  structs), errgroup, kin-openapi (v1.1 only). Justify anything else.
+  structs), errgroup. Justify anything else.
 - Errors wrapped with context (`fmt.Errorf("triage finding %s: %w", ...)`).
 - No global state; everything injected through constructors for testability.
 
