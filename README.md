@@ -61,7 +61,7 @@ jobs:
         run: sast-triage -sarif findings.sarif -repo . -fail-on-new-exploitable
 ```
 
-Swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules). For production, use the [workflow this repo runs on itself](.github/workflows/triage.yml): everything pinned (actions by SHA, opengrep by sha256, rules by commit), plus a push-to-main job that files issues for exploitables, uploads triaged results to the Security tab, and maintains the cache review PR — merging that PR is what makes later runs cache hits.
+Swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules). Want to see the output first? This repo's [open alerts](https://github.com/alexpermiakov/sast-triage/security/code-scanning) and [issues](https://github.com/alexpermiakov/sast-triage/issues) come from [`demo/`](demo/) — intentionally vulnerable code we keep unfixed so the pipeline's real output is always on display. For production, use the [workflow this repo runs on itself](.github/workflows/triage.yml): everything pinned (actions by SHA, opengrep by sha256, rules by commit), plus a push-to-main job that files issues for exploitables, uploads triaged results to the Security tab, and maintains the cache review PR — merging that PR is what makes later runs cache hits.
 
 ## Run it directly
 

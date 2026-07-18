@@ -28,6 +28,10 @@ internal/
                      repo on push/PR to main; PR jobs are read-only and gate on new
                      exploitables, main jobs file issues + refresh the triage/main
                      cache review PR)
+demo/                vulnapp: intentionally vulnerable proof-of-life target,
+                     scanned and triaged FOR REAL in CI — its findings stay
+                     open on purpose (Security tab + issues showcase); never
+                     "fix" it
 testdata/            real scanner SARIF fixtures, opengrep/semgrep format (pinned
                      to unit-test line numbers)
                      + sampleapp/, the intentionally vulnerable smoke-test target
@@ -35,7 +39,8 @@ testdata/            real scanner SARIF fixtures, opengrep/semgrep format (pinne
 
 Do not add findings-bearing source to `testdata/` expecting it to be triaged:
 those paths are short-circuited to `benign` by the agent, excluded from the CI
-scan, and their line numbers are pinned to unit tests.
+scan, and their line numbers are pinned to unit tests. Findings meant to be
+triaged for real belong in `demo/`.
 
 ## Hard rules
 
