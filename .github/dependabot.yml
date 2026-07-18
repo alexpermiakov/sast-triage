@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Go modules: anthropic-sdk-go + transitives.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-deps:
+        patterns: ["*"]
+
+  # Keeps the SHA-pinned actions in .github/workflows current — bumps the
+  # commit SHA and the trailing "# vX.Y.Z" comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
