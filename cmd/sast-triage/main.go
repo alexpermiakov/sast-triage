@@ -29,7 +29,7 @@ func main() {
 		triagedSARIF     = flag.String("triaged-sarif", "", "write a verdict-annotated copy of the input SARIF here (benign findings carry suppressions) for Code Scanning upload; empty = skip")
 		provider         = flag.String("provider", "openai", "LLM provider: openai (any OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, OpenAI) | anthropic")
 		baseURL          = flag.String("base-url", "", "OpenAI-compatible API base URL (required for provider=openai), e.g. http://localhost:11434/v1 for local Ollama. No default: the tool only ever talks to the endpoint you name")
-		model            = flag.String("model", "", "model name for the chosen provider (e.g. qwen2.5-coder:7b for openai/Ollama); defaults to claude-sonnet-5 for provider=anthropic")
+		model            = flag.String("model", "", "model name for the chosen provider — always required (e.g. claude-sonnet-5 for anthropic, qwen2.5-coder:7b for openai/Ollama)")
 		effort           = flag.String("effort", "medium", "triage depth per finding: small|medium|large (scales read/grep caps, token budget, iterations)")
 		maxIter          = flag.Int("max-iterations", 10, "agent loop iteration cap per finding (overrides -effort)")
 		tokenBudget      = flag.Int("token-budget", 60000, "token budget per finding, input+output (overrides -effort)")
@@ -96,7 +96,8 @@ func main() {
 		cfg.Client = agent.NewOpenAIClient(*baseURL, os.Getenv("OPENAI_API_KEY"))
 	case "anthropic":
 		if cfg.Model == "" {
-			cfg.Model = "claude-sonnet-5"
+			fmt.Fprintln(os.Stderr, "sast-triage: -provider anthropic requires -model (e.g. -model claude-sonnet-5)")
+			os.Exit(2)
 		}
 		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 			cfg.Client = agent.NewAnthropicClient(key)

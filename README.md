@@ -62,7 +62,7 @@ jobs:
       - name: Triage — fail only on NEW exploitable findings
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: sast-triage -provider anthropic -sarif findings.sarif -repo .
+        run: sast-triage -provider anthropic -model claude-sonnet-5 -sarif findings.sarif -repo .
 ```
 
 </details>
@@ -139,7 +139,8 @@ sast-triage -sarif findings.sarif -repo . \
   -base-url http://localhost:11434/v1 -model qwen2.5-coder:7b
 
 #    …or Claude
-sast-triage -provider anthropic -sarif findings.sarif -repo .   # needs ANTHROPIC_API_KEY
+sast-triage -provider anthropic -model claude-sonnet-5 \
+  -sarif findings.sarif -repo .
 
 cat triage-report.md
 ```
@@ -157,7 +158,7 @@ Real output, live: this repo triages its own intentionally vulnerable [`demo/`](
 | -------------------------- | -------------------- | ------------------------------------------------------------------------------------------------- |
 | `-provider`                | `openai`             | `openai` (any OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, OpenAI itself) or `anthropic` |
 | `-base-url`                | —                    | Endpoint for `openai`; **required, no default** — the tool only ever talks to the host you name   |
-| `-model`                   | —                    | Required for `openai`; defaults to `claude-sonnet-5` for `anthropic`                              |
+| `-model`                   | —                    | **Required, no default** — e.g. `claude-sonnet-5` (anthropic), `qwen2.5-coder:7b` (openai)        |
 | `-sarif`                   | `findings.sarif`     | SARIF 2.1.0 input                                                                                 |
 | `-repo`                    | `.`                  | Repository root the findings refer to                                                             |
 | `-cache`                   | `triage-cache.json`  | Verdict cache (commit it to git)                                                                  |
