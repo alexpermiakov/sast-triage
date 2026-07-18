@@ -1,4 +1,4 @@
-# 🔍 SAST Triage Agent
+# sast-triage
 
 [![CI](https://github.com/alexpermiakov/sast-triage/actions/workflows/ci.yml/badge.svg)](https://github.com/alexpermiakov/sast-triage/actions/workflows/ci.yml)
 [![Triage](https://github.com/alexpermiakov/sast-triage/actions/workflows/triage.yml/badge.svg)](https://github.com/alexpermiakov/sast-triage/actions/workflows/triage.yml)
@@ -7,11 +7,13 @@
 
 **You turned on a SAST scanner — Semgrep, CodeQL, SonarQube — got 400 findings, and turned it off.** Most were false positives; nobody had time to check.
 
-The vendors know it — AI triage now ships in their paid tiers at $25–30 per developer per month (Semgrep Teams, GitHub Code Security, Snyk): a 50-developer shop pays $15k–18k a year, before the "contact sales" enterprise tier.
+AI triage for this already exists — Semgrep Teams, GitHub Code Security, and Snyk ship it in their paid tiers at $25–30 per developer per month: a 50-developer team pays $15k–18k a year, and enterprise plans cost more.
 
-`sast-triage` does the same job without the seat license — MIT, one Go binary, bring your own model (local Ollama = $0, or your Claude API key). **It does what a security analyst would**: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. After the first run, triage costs ~$0.
+`sast-triage` does the same job without the per-developer fee — MIT, one Go binary, bring your own model (local Ollama = $0, or your Claude API key).
 
-### How it works
+**It does what a security analyst would**: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. After the first run, triage costs ~$0.
+
+## How it works
 
 ```mermaid
 graph LR
@@ -26,7 +28,7 @@ graph LR
     V --> P["cache review PR"]
 ```
 
-**Safety bounds:**
+### Safety bounds
 
 - **Read-only tools** — `read_file` and `grep_repo` only; no writes, no exec
 - **Token & iteration budgets** — 10 iterations / 60k tokens per finding by default, plus a 50-findings cap per run; the loop always terminates
@@ -34,8 +36,6 @@ graph LR
 - **Cache invalidation on code change** — a verdict expires the moment any line it cited changes
 
 ## Quick Start
-
-One job: your scanner produces `findings.sarif`, `sast-triage` reads the code behind each finding, and the PR fails only on **new exploitable** ones. Pick a model — or skip CI and run it straight from your terminal:
 
 <details open>
 <summary><b>Claude</b> — what this repo's own CI uses</summary>
@@ -56,21 +56,19 @@ jobs:
       # → produce findings.sarif with your scanner here (opengrep example below ⬇)
 
       - name: Triage — fail only on NEW exploitable findings
-        uses: alexpermiakov/sast-triage@v1 # or pin a commit SHA
+        uses: alexpermiakov/sast-triage@v1
         with:
           provider: anthropic
           model: claude-sonnet-5
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-The action needs no setup step: it installs Go and builds the binary from the exact revision you pinned — the ref after `@` is both the action and the code that runs.
-
 </details>
 
 <details>
 <summary><b>Local model</b> (OpenAI-compatible) — no API key, no cost, nothing leaves the runner</summary>
 
-This path is built for your own on-premise runners: the model sits next to the code and nothing crosses the fence. No GPU runners handy? The same job also works on GitHub's stock `ubuntu-latest`, if the model is tiny enough for its CPU:
+This path is built for your own on-premise runners: the model sits next to the code and nothing crosses the fence.
 
 ```yaml
 name: Triage
@@ -91,20 +89,20 @@ jobs:
       # → produce findings.sarif with your scanner here (opengrep example below ⬇)
 
       - name: Triage — fail only on NEW exploitable findings
-        uses: alexpermiakov/sast-triage@v1 # or pin a commit SHA
+        uses: alexpermiakov/sast-triage@v1
         with:
           base-url: http://localhost:11434/v1
           model: qwen2.5-coder:1.5b-instruct
 ```
 
-`qwen2.5-coder:1.5b-instruct` is what this repo's own local-model runs use — honest but cautious: verdicts are fail-closed, so a tiny model says `uncertain` a lot and confident `benign` rarely. On a self-hosted GPU runner (`runs-on: [self-hosted, gpu]`), swap in a model with real judgment — e.g. `qwen3-coder:30b` — and keep everything else identical. The same two inputs also point at any OpenAI-compatible endpoint — vLLM, LM Studio, or OpenAI itself (`base-url: https://api.openai.com/v1` + `openai-api-key: ${{ secrets.OPENAI_API_KEY }}`).
+The same two inputs point at any OpenAI-compatible endpoint — vLLM, LM Studio, or OpenAI itself.
 
 </details>
 
 <details>
 <summary><b>The scan step</b> — producing <code>findings.sarif</code> (opengrep here, but any SARIF scanner works)</summary>
 
-Nothing downstream is opengrep-specific: any scanner that emits SARIF 2.1.0 plugs in — Semgrep, CodeQL, Snyk Code, gosec, Bandit — opengrep is just the one this repo tests against. Paste this where the workflow says "your scanner here", and swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules):
+Any scanner that emits SARIF 2.1.0 plugs in — Semgrep, CodeQL, Snyk Code, gosec, Bandit; swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules):
 
 ```yaml
 - name: Scan with opengrep → findings.sarif
@@ -143,16 +141,30 @@ sast-triage -provider anthropic -model claude-sonnet-5 \
 cat triage-report.md
 ```
 
-Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this — it's the agent's memory). Exits 3 if it decided any new exploitable — that's the PR gate doing its job; `-fail-on-new-exploitable=false` turns it off. Requires Go 1.26+ (older toolchains ≥1.21 auto-download it).
-
 </details>
-
-Real output, live: this repo triages its own intentionally vulnerable [`demo/`](demo/) — see the resulting [Security alerts](https://github.com/alexpermiakov/sast-triage/security/code-scanning) and [issues](https://github.com/alexpermiakov/sast-triage/issues).
 
 For production, start from the [workflow this repo runs on itself](.github/workflows/triage.yml).
 
-<details open>
-<summary><strong>Flags & action inputs</strong></summary>
+## Features
+
+- ✅ **PR gate** — fails only on _new_ exploitable findings; the pre-existing backlog never blocks a merge
+- ✅ **Human-approved verdicts** — cache updates land in a single review PR
+- ✅ **Security tab integration** — triaged SARIF uploads to GitHub Code Scanning; benign findings arrive dismissed, with the reason as justification
+- ✅ **Any SARIF 2.1.0 scanner** — Semgrep, CodeQL, Snyk Code, gosec, Bandit, …
+
+## Cost Examples
+
+Ballpark at Claude Sonnet pricing, `medium` effort — a typical finding takes 2k–6k tokens:
+
+| Scenario                          | Tokens    | Cost        |
+| --------------------------------- | --------- | ----------- |
+| First run (50 findings, `medium`) | ~60k–300k | $0.30–$1.50 |
+| Second run (cache hits)           | ~0        | ~$0         |
+| Incremental (1 new + 49 cache)    | ~6k       | $0.03       |
+
+Bootstrap is expensive; everything after is cheap.
+
+## Flags & action inputs
 
 The GitHub Action exposes every flag as an input of the same name, minus the leading dash — `-base-url` becomes `base-url:`, `-fail-on-new-exploitable` becomes `fail-on-new-exploitable:` — with identical defaults:
 
@@ -183,28 +195,6 @@ API keys come from the environment: `ANTHROPIC_API_KEY` for `anthropic`, `OPENAI
 | `small`  | 100             | 25           | 30k          | 6          |
 | `medium` | 200             | 50           | 60k          | 10         |
 | `large`  | 400             | 100          | 120k         | 15         |
-
-</details>
-
-## Cost Examples
-
-| Scenario                          | Tokens    | Cost        |
-| --------------------------------- | --------- | ----------- |
-| First run (50 findings, `medium`) | ~60k–300k | $0.30–$1.50 |
-| Second run (cache hits)           | ~0        | ~$0         |
-| Incremental (1 new + 49 cache)    | ~6k       | $0.03       |
-
-Typical finding: 2k–6k tokens. Bootstrap is expensive; everything after is cheap.
-
-## Features
-
-- ✅ **Evidence-keyed caching** — verdicts auto-expire when cited code changes
-- ✅ **Bounded loops** — no runaway LLM calls; iteration & token budgets per finding
-- ✅ **Read-only tools** — no code generation, no writes, no surprises
-- ✅ **PR review workflow** — cache updates land in a single review PR, human-vetted
-- ✅ **CI integration** — fail PR only on _new_ exploitable findings
-- ✅ **Security tab integration** — triaged SARIF uploads to GitHub Code Scanning; benign findings arrive dismissed, with the reason as justification
-- ✅ **Multi-scanner support** — SARIF 2.1.0 with stable fingerprints
 
 ## FAQ
 
@@ -252,8 +242,3 @@ Any OpenAI-compatible endpoint out of the box (`-provider openai`, the default):
 Scope. Triage is a judgment task with a verifiable output contract. Write access would turn a wrong verdict into a wrong commit. Judgment only.
 
 </details>
-
----
-
-**License:** MIT | **SAST findings triage with LLM agents, bounded and cached**
-
