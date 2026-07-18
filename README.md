@@ -1,12 +1,11 @@
 # 🔍 Triage Agent
 
-[![CI](https://github.com/alexpermiakov/sast-triage/workflows/ci/badge.svg)](https://github.com/alexpermiakov/sast-triage/actions?query=workflow%3Aci)
-[![Test Coverage](https://codecov.io/gh/alexpermiakov/sast-triage/branch/main/graph/badge.svg)](https://codecov.io/gh/alexpermiakov/sast-triage)
+[![CI](https://github.com/alexpermiakov/sast-triage/actions/workflows/ci.yml/badge.svg)](https://github.com/alexpermiakov/sast-triage/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**AI-powered triage for SAST findings. Cuts LLM costs by 99% with intelligent caching. Read-only, bounded, fail-closed.**
+**You turned on a SAST scanner, got 400 findings, and turned it off.** Most were false positives; nobody had time to check.
 
-SAST scanners generate noise. `sast-triage` does what junior security analysts do: read the code, trace the taint, decide if it's real. Verdict are cached in git, keyed to the evidence, and reviewed via PR. After bootstrap (~5k–60k tokens), incremental runs cost nearly $0 since every cached verdict is skipped.
+`sast-triage` does what a security analyst would: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. PRs fail only on _new exploitable_ findings. Verdicts are cached in git, keyed to the evidence they cite, and approved by humans via PR. After the first run, triage costs ~$0.
 
 ### How it works
 
@@ -27,6 +26,8 @@ graph LR
 - Token & iteration budgets per finding; findings cap per run
 - Three-valued verdicts (no unsafe defaults)
 - Cache invalidation on code change
+
+**What about prompt injection — a comment claiming "this is safe"?** Repo content enters the prompt as evidence, never as instructions. A `benign` verdict requires cited `file:line` evidence that the tool re-verifies — prose claims don't meet the bar. The worst case for a fooled model is a wrong verdict, and the dangerous direction (false `benign`) demands the most proof, is human-approved in a PR, and auto-expires when any cited line changes.
 
 ## Quick Start: CI
 
@@ -126,13 +127,6 @@ Typical finding: 2k–6k tokens. Bootstrap is expensive; everything after is che
 - ✅ **Multi-scanner support** — SARIF 2.1.0 with stable fingerprints
 
 ## FAQ
-
-<details>
-<summary><strong>Can comments trick the agent into saying "safe"?</strong></summary>
-
-No. Code enters as evidence, not instructions. The system prompt enforces this. `benign` verdicts must cite `file:line` refs with evidence the tool re-verifies. The agent's memory is human-reviewed and auto-expires when any cited line changes.
-
-</details>
 
 <details>
 <summary><strong>Why commit the cache to git?</strong></summary>
