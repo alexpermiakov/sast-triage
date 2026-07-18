@@ -84,6 +84,14 @@ cache backend.
 
 - Per new finding: agent loop. Tools: `read_file`, `grep_repo`. Read-only,
   path-validated, repo-rooted.
+- Provider-agnostic behind a one-method `Client` interface. Two adapters:
+  `openai` (any OpenAI-compatible endpoint — Ollama/vLLM/LM Studio/OpenAI, plain
+  net/http, no SDK) and `anthropic` (native SDK). Default is `openai` pointed at
+  local Ollama (`http://localhost:11434/v1`) so the out-of-the-box path keeps
+  code on the user's machine; hosted providers are opt-in. The loop keys on
+  tool-use blocks, not stop reasons, so adapters only map messages/tools/usage.
+  Fail-closed verdicts mean a weaker local model yields more `uncertain`, never
+  silent `benign`; the deciding model is recorded per cache entry.
 - All caps scale with `-effort small|medium|large`, never disappear: read_file
   lines 100/200/400, grep matches 25/50/100, token budget 30k/60k/120k,
   iteration cap 6/10/15. Medium is the default; explicit

@@ -27,7 +27,9 @@ func main() {
 		repoRoot         = flag.String("repo", ".", "repository root the findings refer to")
 		reportPath       = flag.String("report", "triage-report.md", "markdown report output")
 		triagedSARIF     = flag.String("triaged-sarif", "", "write a verdict-annotated copy of the input SARIF here (benign findings carry suppressions) for Code Scanning upload; empty = skip")
-		model            = flag.String("model", "claude-sonnet-5", "Anthropic model for triage")
+		provider         = flag.String("provider", "openai", "LLM provider: openai (any OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, OpenAI) | anthropic")
+		baseURL          = flag.String("base-url", "http://localhost:11434/v1", "OpenAI-compatible API base URL (provider=openai); default targets a local Ollama so nothing leaves your machine")
+		model            = flag.String("model", "", "model name for the chosen provider (e.g. qwen2.5-coder:7b for openai/Ollama); defaults to claude-sonnet-5 for provider=anthropic")
 		effort           = flag.String("effort", "medium", "triage depth per finding: small|medium|large (scales read/grep caps, token budget, iterations)")
 		maxIter          = flag.Int("max-iterations", 10, "agent loop iteration cap per finding (overrides -effort)")
 		tokenBudget      = flag.Int("token-budget", 60000, "token budget per finding, input+output (overrides -effort)")
@@ -77,8 +79,27 @@ func main() {
 		Log:              os.Stderr,
 	}
 
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		cfg.Client = agent.NewAnthropicClient(key)
+	// Provider selection. openai is the default so the out-of-the-box path
+	// talks to a local endpoint and no code leaves the machine; anthropic is
+	// opt-in. A nil Client is fine — the pipeline only errors if a finding
+	// actually needs the LLM (cache-only runs need no provider).
+	switch *provider {
+	case "openai":
+		if cfg.Model == "" {
+			fmt.Fprintln(os.Stderr, "sast-triage: -provider openai requires -model (e.g. -model qwen2.5-coder:7b)")
+			os.Exit(2)
+		}
+		cfg.Client = agent.NewOpenAIClient(*baseURL, os.Getenv("OPENAI_API_KEY"))
+	case "anthropic":
+		if cfg.Model == "" {
+			cfg.Model = "claude-sonnet-5"
+		}
+		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+			cfg.Client = agent.NewAnthropicClient(key)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "sast-triage: unknown -provider %q (want openai or anthropic)\n", *provider)
+		os.Exit(2)
 	}
 	if *createIssues {
 		token := os.Getenv("GITHUB_TOKEN")

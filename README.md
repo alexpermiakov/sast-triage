@@ -31,7 +31,7 @@ graph LR
 
 ## Quick Start: CI
 
-CI is the main use case. Add `ANTHROPIC_API_KEY` to your repo secrets, then drop this into `.github/workflows/triage.yml`:
+CI is the main use case, and by default it runs a **local** model — no API key, no secrets, no source leaving the runner. Drop this into `.github/workflows/triage.yml`:
 
 ```yaml
 name: Triage
@@ -41,11 +41,16 @@ permissions:
 jobs:
   triage:
     runs-on: ubuntu-latest
+    services:
+      ollama:
+        image: ollama/ollama:latest
+        ports: ["11434:11434"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with: { go-version: stable }
       - run: GOBIN=/usr/local/bin go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
+      - run: curl -fsS http://localhost:11434/api/pull -d '{"name":"qwen2.5-coder:7b"}'
 
       - name: Scan with opengrep → findings.sarif
         run: |
@@ -56,43 +61,56 @@ jobs:
           opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
 
       - name: Triage — fail only on NEW exploitable findings
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: sast-triage -sarif findings.sarif -repo . -fail-on-new-exploitable
+        run: sast-triage -sarif findings.sarif -repo . -model qwen2.5-coder:7b -fail-on-new-exploitable
 ```
+
+Prefer Claude (or any hosted model)? Add `-provider anthropic` with an `ANTHROPIC_API_KEY` secret, or `-base-url https://api.openai.com/v1` with `OPENAI_API_KEY` — the tool is the same, only the endpoint changes.
 
 Swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules). Want to see the output first? This repo's [open alerts](https://github.com/alexpermiakov/sast-triage/security/code-scanning) and [issues](https://github.com/alexpermiakov/sast-triage/issues) come from [`demo/`](demo/) — intentionally vulnerable code we keep unfixed so the pipeline's real output is always on display. For production, use the [workflow this repo runs on itself](.github/workflows/triage.yml): everything pinned (actions by SHA, opengrep by sha256, rules by commit), plus a push-to-main job that files issues for exploitables, uploads triaged results to the Security tab, and maintains the cache review PR — merging that PR is what makes later runs cache hits.
 
 ## Run it directly
 
-For a one-off triage outside CI:
+For a one-off triage outside CI. **By default nothing leaves your machine** — the agent talks to a local model:
 
 ```bash
 go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
-export ANTHROPIC_API_KEY=sk-ant-...
 
 # 1. Scan — anything emitting SARIF 2.1.0 with stable fingerprints works;
 #    opengrep (binary: github.com/opengrep/opengrep/releases) is what's tested
 git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/opengrep-rules
 opengrep scan -f /tmp/opengrep-rules/go --sarif --dataflow-traces --output findings.sarif
 
-# 2. Triage (defaults: -cache triage-cache.json -report triage-report.md)
-sast-triage -sarif findings.sarif -repo .
+# 2. Triage with a local model via Ollama (the default provider/base-url)
+ollama serve &                        # http://localhost:11434
+ollama pull qwen2.5-coder:7b
+sast-triage -sarif findings.sarif -repo . -model qwen2.5-coder:7b
 
 cat triage-report.md
 ```
 
-Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this — it's the agent's memory). Requires Go 1.22+ and an [Anthropic API key](https://console.anthropic.com).
+Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this — it's the agent's memory). Requires Go 1.22+.
+
+### Providers
+
+`-provider openai` (the default) speaks the OpenAI chat-completions API, so it works with **any** OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, or OpenAI itself — via `-base-url` and `-model`. The default `-base-url` is `http://localhost:11434/v1` (local Ollama), so your code never reaches a hosted service unless you point it at one. For OpenAI proper, set `-base-url https://api.openai.com/v1` and export `OPENAI_API_KEY`.
+
+For Claude, use `-provider anthropic` (defaults `-model` to `claude-sonnet-5`) and export `ANTHROPIC_API_KEY`:
+
+```bash
+sast-triage -provider anthropic -sarif findings.sarif -repo .
+```
 
 <details>
 <summary><strong>Flags</strong></summary>
 
 | Flag                       | Default           | Purpose                                          |
 | -------------------------- | ----------------- | ------------------------------------------------ |
+| `-provider`                | `openai`          | `openai` (any OpenAI-compatible endpoint) or `anthropic` |
+| `-base-url`                | `…:11434/v1`      | OpenAI-compatible endpoint (default: local Ollama) |
+| `-model`                   | —                 | Model name; required for `openai`, defaults to `claude-sonnet-5` for `anthropic` |
 | `-effort`                  | `medium`          | Depth: `small`, `medium`, `large`                |
 | `-max-findings-budget`     | `50`              | Max findings triaged per run                     |
 | `-fail-on-new-exploitable` | off               | Exit 3 if any new exploitable found              |
-| `-model`                   | `claude-sonnet-5` | Anthropic model                                  |
 | `-parallel`                | `4`               | Concurrent findings                              |
 | `-create-issues`           | off               | File GitHub issues for exploitable findings      |
 | `-link-base`               | —                 | E.g., `https://github.com/owner/repo/blob/<sha>` |
@@ -147,9 +165,9 @@ No. It consumes SARIF 2.1.0 from any scanner. opengrep and semgrep are what's te
 </details>
 
 <details>
-<summary><strong>Can I use OpenAI or Gemini?</strong></summary>
+<summary><strong>Which models can I use?</strong></summary>
 
-Yes. The agent uses a minimal `Client` interface ([`internal/agent/client.go`](internal/agent/client.go)); Anthropic is one implementation. Add another by implementing the interface.
+Any OpenAI-compatible endpoint out of the box (`-provider openai`, the default): Ollama, vLLM, LM Studio, or OpenAI itself — pick with `-base-url` and `-model`. Claude via `-provider anthropic`. Both are thin adapters over a one-method `Client` interface ([`internal/agent/client.go`](internal/agent/client.go)); a new provider is one file implementing `Complete`. The verdict logic is fail-closed, so a weaker local model produces more `uncertain` verdicts, never silent `benign` ones — and the cache records which model decided each verdict.
 
 </details>
 

@@ -19,7 +19,11 @@ internal/
   sarif/             parse findings.sarif; annotate verdicts back into SARIF
                      for Code Scanning upload (pure, no I/O beyond the file)
   cache/             triage-cache.json load/save, fingerprint+codeHash matching
-  agent/             the LLM loop: client, tools, budgets, verdict parsing
+  agent/             the LLM loop: client, tools, budgets, verdict parsing.
+                     Provider adapters behind one Client iface: openai.go (any
+                     OpenAI-compatible endpoint, net/http only — the default)
+                     and anthropic.go (native SDK). Default provider is openai
+                     → local Ollama, so nothing leaves the machine by default.
   report/            triage-report.md rendering, GitHub issue bodies
   github/            minimal Issues REST client (dedupe owned by cache issueRef)
   pipeline/          run orchestration: partition, budget, errgroup fan-out,
