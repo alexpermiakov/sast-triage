@@ -9,7 +9,7 @@
 
 AI triage for this already exists — Semgrep Teams, GitHub Code Security, and Snyk ship it in their paid tiers at $25–30 per developer per month: a 50-developer team pays $15k–18k a year, and enterprise plans cost more.
 
-`sast-triage` does the same job without the per-developer fee — MIT, one Go binary, bring your own model (local Ollama = $0, or your Claude API key).
+`sast-triage` does the same job without the per-developer fee — MIT licence, one Go binary, bring your own model (local Ollama = $0, or your Claude API key).
 
 **It does what a security analyst would**: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. After the first run, triage costs ~$0.
 
@@ -40,7 +40,7 @@ graph LR
 <details open>
 <summary><b>Claude</b> — what this repo's own CI uses</summary>
 
-Add an `ANTHROPIC_API_KEY` repo secret, then drop this into `.github/workflows/triage.yml`:
+Add an `ANTHROPIC_API_KEY` repo secret, then add this to your CI — as a new `.github/workflows/triage.yml`, or copy the `triage` job into a workflow you already have:
 
 ```yaml
 name: Triage
@@ -154,7 +154,7 @@ For production, start from the [workflow this repo runs on itself](.github/workf
 
 ## Cost Examples
 
-Ballpark at Claude Sonnet pricing, `medium` effort — a typical finding takes 2k–6k tokens:
+Estimates at Claude Sonnet pricing, `medium` effort — a typical finding takes 2k–6k tokens:
 
 | Scenario                          | Tokens    | Cost        |
 | --------------------------------- | --------- | ----------- |
@@ -162,7 +162,7 @@ Ballpark at Claude Sonnet pricing, `medium` effort — a typical finding takes 2
 | Second run (cache hits)           | ~0        | ~$0         |
 | Incremental (1 new + 49 cache)    | ~6k       | $0.03       |
 
-Bootstrap is expensive; everything after is cheap.
+Only the first run costs real money — after that, the cache answers everything except new findings.
 
 ## Flags & action inputs
 
@@ -186,9 +186,7 @@ The GitHub Action exposes every flag as an input of the same name, minus the lea
 | `-github-repo`             | `$GITHUB_REPOSITORY` | `owner/name` for issue creation                                                                   |
 | `-link-base`               | —                    | E.g., `https://github.com/owner/repo/blob/<sha>`                                                  |
 
-API keys come from the environment: `ANTHROPIC_API_KEY` for `anthropic`, `OPENAI_API_KEY` for hosted OpenAI-compatible endpoints (local ones need none). The action also takes them as inputs — `anthropic-api-key:` / `openai-api-key:` — plus `github-token:` for issue creation (defaults to the workflow token) and `extra-args:` for the long tail (e.g. `extra-args: "-max-iterations 15"`). Fine-tuning: `-max-iterations` and `-token-budget` override the `-effort` preset; `-issue-label` and `-issue-title-prefix` customize filed issues.
-
-**Effort presets** (scale per-finding budgets):
+**Effort presets** — `-effort` sets how much the agent may read and how long it may work on one finding; when the budget runs out, the verdict falls back to `uncertain`:
 
 | Effort   | read_file lines | grep matches | token budget | iterations |
 | -------- | --------------- | ------------ | ------------ | ---------- |
@@ -242,3 +240,4 @@ Any OpenAI-compatible endpoint out of the box (`-provider openai`, the default):
 Scope. Triage is a judgment task with a verifiable output contract. Write access would turn a wrong verdict into a wrong commit. Judgment only.
 
 </details>
+
