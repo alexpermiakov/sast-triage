@@ -5,32 +5,32 @@
       "ruleId": "opengrep-rules.go.lang.security.audit.xss.no-fprintf-to-responsewriter",
       "file": "demo/vulnapp/vulnapp.go",
       "verdict": "uncertain",
-      "reason": "token budget exhausted (114124 used, 60000 allowed)",
+      "reason": "token budget exhausted (114082 used, 60000 allowed)",
       "evidence": null,
       "codeHash": "sha256:2d819a60fd2fa075ff830163f500b8656c14aeeaadf09cbe4de9632b217e1f4a",
       "model": "claude-sonnet-5",
-      "decidedAt": "2026-07-18T19:19:00Z",
-      "tokensUsed": 114124
+      "decidedAt": "2026-07-18T19:17:00Z",
+      "tokensUsed": 114082
     },
     "161ab885ca0f0ba0c96e34c203c0c4b46517d22c0d59548569502384f3b40f78ba33136b06cb4be77355b5c48870b5e64d691496776ed23cbd11fbfc3be75cbf_0": {
       "ruleId": "opengrep-rules.go.lang.security.audit.xss.no-fprintf-to-responsewriter",
       "file": "demo/vulnapp/vulnapp.go",
       "verdict": "exploitable",
-      "reason": "The `name` query parameter is read directly from the request via r.URL.Query().Get(\"name\") and passed unescaped into fmt.Fprintf, which writes raw bytes to the http.ResponseWriter. There is no HTML escaping, encoding, or validation applied to the value before it is written to the response body, so an attacker can supply a value like '\u003cscript\u003e...\u003c/script\u003e' as the name parameter and have it reflected verbatim in the HTTP response, resulting in classic reflected XSS.",
+      "reason": "The `name` query parameter is read directly from the request via r.URL.Query().Get(\"name\") and passed unescaped into fmt.Fprintf writing to the http.ResponseWriter, with no HTML-escaping, validation, or sanitization applied anywhere in between. An attacker can supply a value like `\u003cscript\u003e...\u003c/script\u003e` as the `name` parameter and have it reflected verbatim in the response body, resulting in reflected XSS.",
       "evidence": [
         "demo/vulnapp/vulnapp.go:37-38"
       ],
       "codeHash": "sha256:c6f124170811f4d386ee66cee30b7dbe23739eff61aac13c1a69d017e55f8b3a",
       "model": "claude-sonnet-5",
-      "decidedAt": "2026-07-18T19:18:41Z",
-      "tokensUsed": 4532,
-      "issueRef": 78
+      "decidedAt": "2026-07-18T19:16:41Z",
+      "tokensUsed": 4540,
+      "issueRef": 73
     },
     "c6de3bdcd39b4d9e4fc08fc96f177038e964f0770ea08fbc6b83ddf9c361291ef29a25a89767e10f249f08c7221732949aad3a18d914df984937b8a6023ce790_0": {
       "ruleId": "opengrep-rules.go.lang.security.injection.tainted-sql-string",
       "file": "demo/vulnapp/vulnapp.go",
       "verdict": "exploitable",
-      "reason": "The `id` HTTP query parameter (r.URL.Query().Get(\"id\")) is attacker-controlled and is concatenated directly into a SQL query string via fmt.Sprintf with no validation, escaping, or parameterization, then executed with s.db.QueryRow(query). No sanitization occurs between source and sink, so an attacker can inject arbitrary SQL via the `id` parameter (e.g. `?id=1 OR 1=1` or UNION-based injection).",
+      "reason": "The handler reads the untrusted `id` parameter directly from the request URL query string (`r.URL.Query().Get(\"id\")`) with no validation, escaping, or allow-listing, then interpolates it directly into a SQL statement via fmt.Sprintf and executes the resulting string with db.QueryRow. There is no parameterization (no `?` placeholder/args) and no sanitization function is applied to `id` between source and sink, so an attacker can inject arbitrary SQL via the `id` query parameter.",
       "evidence": [
         "demo/vulnapp/vulnapp.go:24",
         "demo/vulnapp/vulnapp.go:25",
@@ -38,15 +38,15 @@
       ],
       "codeHash": "sha256:9235011e6d23529061ca88f7e3e86f4ad61464ec7c05679057a7bd98e2856f77",
       "model": "claude-sonnet-5",
-      "decidedAt": "2026-07-18T19:18:41Z",
-      "tokensUsed": 5336,
-      "issueRef": 77
+      "decidedAt": "2026-07-18T19:16:41Z",
+      "tokensUsed": 5376,
+      "issueRef": 74
     },
     "f1d331aa6711b5d395aefca110bf16e45615ace920b404b33994d8133568a5cfbeaa6c384c4d0ed4618966ca4af825556cf76672d330e18de2d54d95999139a9_0": {
       "ruleId": "opengrep-rules.go.lang.security.audit.database.string-formatted-query",
       "file": "demo/vulnapp/vulnapp.go",
       "verdict": "exploitable",
-      "reason": "The HTTP query parameter 'id' (r.URL.Query().Get(\"id\")) is taken directly from user input and interpolated unsanitized into a SQL string via fmt.Sprintf, which is then executed with db.QueryRow(query) instead of using parameterized placeholders. There is no validation, escaping, or allow-listing of 'id' between lines 24 and 26, so an attacker can inject arbitrary SQL via the 'id' query parameter.",
+      "reason": "The `id` variable is read directly from the HTTP request's query parameters (r.URL.Query().Get(\"id\")) with no validation or escaping, then interpolated into a SQL query string via fmt.Sprintf, and that raw string is executed with s.db.QueryRow(query). There is no parameterized query, whitelist, or sanitization applied anywhere between the input read and the SQL execution, so an attacker can inject arbitrary SQL via the 'id' query parameter.",
       "evidence": [
         "demo/vulnapp/vulnapp.go:24",
         "demo/vulnapp/vulnapp.go:25",
@@ -54,9 +54,9 @@
       ],
       "codeHash": "sha256:9235011e6d23529061ca88f7e3e86f4ad61464ec7c05679057a7bd98e2856f77",
       "model": "claude-sonnet-5",
-      "decidedAt": "2026-07-18T19:18:41Z",
-      "tokensUsed": 4409,
-      "issueRef": 76
+      "decidedAt": "2026-07-18T19:16:42Z",
+      "tokensUsed": 4484,
+      "issueRef": 75
     }
   }
 }
