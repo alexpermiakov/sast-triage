@@ -26,6 +26,7 @@ func main() {
 		cachePath        = flag.String("cache", "triage-cache.json", "triage cache file (committed to git)")
 		repoRoot         = flag.String("repo", ".", "repository root the findings refer to")
 		reportPath       = flag.String("report", "triage-report.md", "markdown report output")
+		triagedSARIF     = flag.String("triaged-sarif", "", "write a verdict-annotated copy of the input SARIF here (benign findings carry suppressions) for Code Scanning upload; empty = skip")
 		model            = flag.String("model", "claude-sonnet-5", "Anthropic model for triage")
 		effort           = flag.String("effort", "medium", "triage depth per finding: small|medium|large (scales read/grep caps, token budget, iterations)")
 		maxIter          = flag.Int("max-iterations", 10, "agent loop iteration cap per finding (overrides -effort)")
@@ -62,6 +63,7 @@ func main() {
 		CachePath:        *cachePath,
 		RepoRoot:         *repoRoot,
 		ReportPath:       *reportPath,
+		TriagedSARIFPath: *triagedSARIF,
 		Model:            *model,
 		MaxIterations:    *maxIter,
 		TokenBudget:      *tokenBudget,

@@ -25,10 +25,11 @@ type IssueCreator interface {
 }
 
 type Config struct {
-	SARIFPath  string
-	CachePath  string
-	RepoRoot   string
-	ReportPath string
+	SARIFPath        string
+	CachePath        string
+	RepoRoot         string
+	ReportPath       string
+	TriagedSARIFPath string // verdict-annotated copy of the input SARIF; empty → skip
 
 	Model          string
 	MaxIterations  int
@@ -178,7 +179,39 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	if err := os.WriteFile(cfg.ReportPath, []byte(md), 0o644); err != nil {
 		return summary, fmt.Errorf("write report: %w", err)
 	}
+	if cfg.TriagedSARIFPath != "" {
+		if err := writeTriagedSARIF(cfg, items); err != nil {
+			return summary, err
+		}
+	}
 	return summary, nil
+}
+
+// writeTriagedSARIF re-emits the input SARIF with this run's verdicts attached
+// (properties.triage on every triaged result, a suppression on benign ones) so
+// CI can upload post-triage truth to Code Scanning.
+func writeTriagedSARIF(cfg Config, items []report.Item) error {
+	raw, err := os.ReadFile(cfg.SARIFPath)
+	if err != nil {
+		return fmt.Errorf("write triaged sarif: %w", err)
+	}
+	verdicts := make(map[string]sarif.Triage, len(items))
+	for _, it := range items {
+		verdicts[it.Fingerprint] = sarif.Triage{
+			Verdict:  it.Verdict,
+			Reason:   it.Reason,
+			Evidence: it.Evidence,
+			Suppress: it.Verdict == agent.VerdictBenign,
+		}
+	}
+	out, err := sarif.Annotate(raw, verdicts)
+	if err != nil {
+		return fmt.Errorf("write triaged sarif: %w", err)
+	}
+	if err := os.WriteFile(cfg.TriagedSARIFPath, out, 0o644); err != nil {
+		return fmt.Errorf("write triaged sarif: %w", err)
+	}
+	return nil
 }
 
 // mergeVerdict records one decided verdict in the cache (all verdict classes

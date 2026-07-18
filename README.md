@@ -61,7 +61,7 @@ jobs:
         run: sast-triage -sarif findings.sarif -repo . -fail-on-new-exploitable
 ```
 
-Swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules). For production, use the [workflow this repo runs on itself](.github/workflows/triage.yml): everything pinned (actions by SHA, opengrep by sha256, rules by commit), plus a push-to-main job that files issues for exploitables and maintains the cache review PR — merging that PR is what makes later runs cache hits.
+Swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules). For production, use the [workflow this repo runs on itself](.github/workflows/triage.yml): everything pinned (actions by SHA, opengrep by sha256, rules by commit), plus a push-to-main job that files issues for exploitables, uploads triaged results to the Security tab, and maintains the cache review PR — merging that PR is what makes later runs cache hits.
 
 ## Run it directly
 
@@ -124,6 +124,7 @@ Typical finding: 2k–6k tokens. Bootstrap is expensive; everything after is che
 - ✅ **Read-only tools** — no code generation, no writes, no surprises
 - ✅ **PR review workflow** — cache updates land in a single review PR, human-vetted
 - ✅ **CI integration** — fail PR only on _new_ exploitable findings
+- ✅ **Security tab integration** — triaged SARIF uploads to GitHub Code Scanning; benign findings arrive dismissed, with the reason as justification
 - ✅ **Multi-scanner support** — SARIF 2.1.0 with stable fingerprints
 
 ## FAQ

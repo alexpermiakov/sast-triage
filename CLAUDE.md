@@ -16,7 +16,8 @@ recorded there; propose changes as questions first.
 ```
 cmd/sast-triage/     main.go — flag parsing, wiring, exit codes only
 internal/
-  sarif/             parse findings.sarif (pure, no I/O beyond the file)
+  sarif/             parse findings.sarif; annotate verdicts back into SARIF
+                     for Code Scanning upload (pure, no I/O beyond the file)
   cache/             triage-cache.json load/save, fingerprint+codeHash matching
   agent/             the LLM loop: client, tools, budgets, verdict parsing
   report/            triage-report.md rendering, GitHub issue bodies

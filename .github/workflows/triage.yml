@@ -110,6 +110,7 @@ jobs:
       contents: write # push the triage/main cache branch
       issues: write # file issues for exploitable findings
       pull-requests: write # open/refresh the cache review PR
+      security-events: write # upload triaged SARIF + dismiss benign alerts
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -152,7 +153,28 @@ jobs:
             -repo . \
             -create-issues \
             -github-repo "${{ github.repository }}" \
+            -triaged-sarif triaged.sarif \
             -link-base "https://github.com/${{ github.repository }}/blob/${{ github.sha }}"
+
+      # Post-triage truth in the Security tab: upload the verdict-annotated
+      # SARIF, then apply its suppressions as dismissals — Code Scanning
+      # ignores the SARIF `suppressions` property on upload, so benign alerts
+      # are dismissed via the API by GitHub's dismiss-alerts action.
+      # Requires code scanning enabled (Settings → Code security and analysis).
+      - name: Upload triaged SARIF to Code Scanning
+        id: codescan
+        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        with:
+          sarif_file: triaged.sarif
+          category: sast-triage
+
+      - name: Dismiss benign alerts
+        uses: advanced-security/dismiss-alerts@a18f986bdb40edba0dd7a74382c15d4a3d50a1c8 # v2.0.3
+        with:
+          sarif-id: ${{ steps.codescan.outputs.sarif-id }}
+          sarif-file: triaged.sarif
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Publish report to run summary
         if: always()
@@ -190,6 +212,7 @@ jobs:
           name: triage-${{ github.run_id }}
           path: |
             findings.sarif
+            triaged.sarif
             triage-report.md
           retention-days: 7
 

@@ -28,7 +28,7 @@ quarantined in `internal/agent`. The LLM gets judgment, never control.
 
 Deliberately out of scope (future candidates): `find_callers` tool via gopls,
 per-scanner ingest adapters, confidence field, MCP interface, org-wide shared
-cache backend, Code Scanning SARIF re-upload.
+cache backend.
 
 ## Stage contracts
 
@@ -120,6 +120,12 @@ returns exit code. No hidden state.
   finding, deduped by fingerprint, `issueRef` stored in cache entry, label
   `security/triage-confirmed`). PRs approve suppressions; issues own
   vulnerabilities.
+- With `-triaged-sarif <path>`: a verdict-annotated copy of the input SARIF —
+  every triaged result gains a `properties.triage` bag (verdict, reason,
+  evidence); benign results also gain a SARIF suppression (kind `external`,
+  status `accepted`, justification = reason). Pure transform in
+  `internal/sarif`: unmatched results and unmodeled fields round-trip
+  unchanged.
 - Exit codes: 0 success; 1 pipeline failure; 2 usage error; 3 only with
   `-fail-on-new-exploitable` when this run _decides_ a finding exploitable.
   Cache hits never trip the gate: the committed cache is the baseline, so
@@ -136,6 +142,11 @@ The repo dogfoods itself: scan + triage of this codebase (excluding
 - Push-to-main jobs: file one issue per exploitable; when the cache changed,
   refresh ONE review PR (branch `triage/main`) carrying the cache delta with
   the report as its body.
+- Push-to-main jobs also upload the triaged SARIF to Code Scanning (category
+  `sast-triage`) so the Security tab reflects post-triage truth. GitHub
+  ignores the SARIF `suppressions` property on upload, so benign alerts are
+  then dismissed via the API (`advanced-security/dismiss-alerts`, SHA-pinned).
+  PR jobs stay read-only and do not upload.
 - Supply chain: actions pinned by SHA, opengrep binary pinned by sha256, rules
   repo pinned by commit. The rules checkout is excluded from the scan and
   deleted before triage (rule corpora carry intentionally vulnerable

@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,6 +80,7 @@ func TestRunFullThenIncremental(t *testing.T) {
 	}}
 	issues := &fakeIssues{}
 	cfg.Issues = issues
+	cfg.TriagedSARIFPath = filepath.Join(dir, "triaged.sarif")
 
 	s, err := Run(context.Background(), cfg)
 	if err != nil {
@@ -122,6 +124,36 @@ func TestRunFullThenIncremental(t *testing.T) {
 	}
 	if !strings.Contains(string(md), "## Proposed suppressions") || !strings.Contains(string(md), "## Exploitable") {
 		t.Errorf("report missing sections:\n%s", md)
+	}
+
+	// Triaged SARIF: all three verdicts attached, only the two benign
+	// findings suppressed. Field-level shape is covered in internal/sarif.
+	var triaged struct {
+		Runs []struct {
+			Results []struct {
+				Properties   struct{ Triage map[string]any }
+				Suppressions []any
+			}
+		}
+	}
+	raw, err := os.ReadFile(cfg.TriagedSARIFPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &triaged); err != nil {
+		t.Fatal(err)
+	}
+	bags, suppressed := 0, 0
+	for _, res := range triaged.Runs[0].Results {
+		if res.Properties.Triage != nil {
+			bags++
+		}
+		if len(res.Suppressions) > 0 {
+			suppressed++
+		}
+	}
+	if bags != 3 || suppressed != 2 {
+		t.Errorf("triaged sarif: %d triage bags (want 3), %d suppressed (want 2)", bags, suppressed)
 	}
 
 	// Second run: everything cached, no client needed, no duplicate issue.
