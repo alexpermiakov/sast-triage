@@ -3,8 +3,8 @@
 // exit codes only; all logic lives in internal/.
 //
 // Exit codes: 0 success (whatever the verdicts), 1 tool failure, 2 usage
-// error, 3 gate tripped (-fail-on-new-exploitable and this run produced new
-// exploitable verdicts).
+// error, 3 gate tripped (this run produced new exploitable verdicts; the gate
+// is on by default, -fail-on-new-exploitable=false opts out).
 package main
 
 import (
@@ -40,7 +40,7 @@ func main() {
 		githubRepo       = flag.String("github-repo", os.Getenv("GITHUB_REPOSITORY"), "owner/name for issue creation")
 		issueLabel       = flag.String("issue-label", "security/triage-confirmed", "label for filed issues")
 		issueTitlePrefix = flag.String("issue-title-prefix", "", "prefix prepended to filed issue titles, e.g. \"<TEST> \"")
-		failOnNewExpl    = flag.Bool("fail-on-new-exploitable", false, "exit 3 if this run decides any finding exploitable (cache hits never trip it) — for PR gating")
+		failOnNewExpl    = flag.Bool("fail-on-new-exploitable", true, "exit 3 if this run decides any finding exploitable (cache hits never trip it); set =false for runs that must not fail, e.g. main-branch issue filing")
 	)
 	flag.Parse()
 

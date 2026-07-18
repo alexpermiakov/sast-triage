@@ -99,7 +99,8 @@ jobs:
           for i in $(seq 1 30); do curl -fsS http://localhost:11434/api/version && break || sleep 2; done
           curl -fsS http://localhost:11434/api/pull -d "{\"name\":\"$MODEL\"}"
 
-      # PR gates on new exploitables; push files issues + writes the annotated SARIF.
+      # PR gates on new exploitables (the default); push opts out of the gate,
+      # files issues + writes the annotated SARIF.
       - name: Triage
         env:
           PROVIDER: ${{ steps.llm.outputs.provider }}
@@ -117,9 +118,9 @@ jobs:
             PROVIDER_ARGS="-provider openai -base-url $BASE_URL -model $MODEL"
           fi
           if [ "${{ github.event_name }}" = pull_request ]; then
-            MODE="-fail-on-new-exploitable"
+            MODE="" # gate is on by default: new exploitable → exit 3
           else
-            MODE="-create-issues -github-repo $REPO -triaged-sarif triaged.sarif"
+            MODE="-fail-on-new-exploitable=false -create-issues -github-repo $REPO -triaged-sarif triaged.sarif"
           fi
           sast-triage $PROVIDER_ARGS \
             -sarif findings.sarif -repo . $MODE \

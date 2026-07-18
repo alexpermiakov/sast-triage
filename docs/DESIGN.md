@@ -135,10 +135,13 @@ returns exit code. No hidden state.
   status `accepted`, justification = reason). Pure transform in
   `internal/sarif`: unmatched results and unmodeled fields round-trip
   unchanged.
-- Exit codes: 0 success; 1 pipeline failure; 2 usage error; 3 only with
-  `-fail-on-new-exploitable` when this run _decides_ a finding exploitable.
-  Cache hits never trip the gate: the committed cache is the baseline, so
-  pre-existing backlog cannot block a PR — only what the PR introduces.
+- Exit codes: 0 success; 1 pipeline failure; 2 usage error; 3 when this run
+  _decides_ a finding exploitable. The gate is on by default (the tool's
+  headline behavior; forgetting a flag must not silently disable gating);
+  runs that may not fail — issue-filing push-to-main jobs, report-only runs —
+  opt out with `-fail-on-new-exploitable=false`. Cache hits never trip the
+  gate: the committed cache is the baseline, so pre-existing backlog cannot
+  block a PR — only what the PR introduces.
 
 ## CI (`.github/workflows/triage.yml`)
 
