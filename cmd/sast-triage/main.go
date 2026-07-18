@@ -28,7 +28,7 @@ func main() {
 		reportPath       = flag.String("report", "triage-report.md", "markdown report output")
 		triagedSARIF     = flag.String("triaged-sarif", "", "write a verdict-annotated copy of the input SARIF here (benign findings carry suppressions) for Code Scanning upload; empty = skip")
 		provider         = flag.String("provider", "openai", "LLM provider: openai (any OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, OpenAI) | anthropic")
-		baseURL          = flag.String("base-url", "http://localhost:11434/v1", "OpenAI-compatible API base URL (provider=openai); default targets a local Ollama so nothing leaves your machine")
+		baseURL          = flag.String("base-url", "", "OpenAI-compatible API base URL (required for provider=openai), e.g. http://localhost:11434/v1 for local Ollama. No default: the tool only ever talks to the endpoint you name")
 		model            = flag.String("model", "", "model name for the chosen provider (e.g. qwen2.5-coder:7b for openai/Ollama); defaults to claude-sonnet-5 for provider=anthropic")
 		effort           = flag.String("effort", "medium", "triage depth per finding: small|medium|large (scales read/grep caps, token budget, iterations)")
 		maxIter          = flag.Int("max-iterations", 10, "agent loop iteration cap per finding (overrides -effort)")
@@ -79,14 +79,18 @@ func main() {
 		Log:              os.Stderr,
 	}
 
-	// Provider selection. openai is the default so the out-of-the-box path
-	// talks to a local endpoint and no code leaves the machine; anthropic is
-	// opt-in. A nil Client is fine — the pipeline only errors if a finding
-	// actually needs the LLM (cache-only runs need no provider).
+	// Provider selection. openai is the default and requires an explicit
+	// -base-url — the tool never invents an endpoint, so it only talks to the
+	// host you name. anthropic is opt-in. A nil Client is fine: the pipeline
+	// only errors if a finding actually needs the LLM (cache-only runs don't).
 	switch *provider {
 	case "openai":
 		if cfg.Model == "" {
 			fmt.Fprintln(os.Stderr, "sast-triage: -provider openai requires -model (e.g. -model qwen2.5-coder:7b)")
+			os.Exit(2)
+		}
+		if *baseURL == "" {
+			fmt.Fprintln(os.Stderr, "sast-triage: -provider openai requires -base-url (e.g. http://localhost:11434/v1 for local Ollama)")
 			os.Exit(2)
 		}
 		cfg.Client = agent.NewOpenAIClient(*baseURL, os.Getenv("OPENAI_API_KEY"))

@@ -86,10 +86,11 @@ cache backend.
   path-validated, repo-rooted.
 - Provider-agnostic behind a one-method `Client` interface. Two adapters:
   `openai` (any OpenAI-compatible endpoint — Ollama/vLLM/LM Studio/OpenAI, plain
-  net/http, no SDK) and `anthropic` (native SDK). Default is `openai` pointed at
-  local Ollama (`http://localhost:11434/v1`) so the out-of-the-box path keeps
-  code on the user's machine; hosted providers are opt-in. The loop keys on
-  tool-use blocks, not stop reasons, so adapters only map messages/tools/usage.
+  net/http, no SDK) and `anthropic` (native SDK). Default provider is `openai`,
+  and its `-base-url` is required with no default — the tool never invents an
+  endpoint, so it only ever talks to the host the operator names (point it at
+  local Ollama and nothing leaves the machine). The loop keys on tool-use
+  blocks, not stop reasons, so adapters only map messages/tools/usage.
   Fail-closed verdicts mean a weaker local model yields more `uncertain`, never
   silent `benign`; the deciding model is recorded per cache entry.
 - All caps scale with `-effort small|medium|large`, never disappear: read_file
@@ -148,9 +149,14 @@ real, so the public repo always shows live output — open alerts and issues
 for its exploitables, dismissals for anything benign. Its findings are never
 fixed; they are the proof-of-life.
 
+- Triage runs a local model (default: a tiny Ollama model in a service
+  container) — no API key, nothing leaves the runner. Cheap on GitHub-hosted
+  runners; swap the model or point at a hosted provider to trade cost for
+  quality. A tiny model produces more `uncertain` verdicts (never silent
+  `benign`), so the gate stays conservative.
 - PR jobs: read-only permissions; triage against the cache committed on main;
-  gate via exit 3. Fork PRs can't see the API key and skip triage with a
-  notice instead of failing red.
+  gate via exit 3. No secret is involved, so fork PRs are triaged too (they no
+  longer skip).
 - Push-to-main jobs: file one issue per exploitable; when the cache changed,
   refresh ONE review PR (branch `triage/main`) carrying the cache delta with
   the report as its body.
@@ -165,9 +171,9 @@ fixed; they are the proof-of-life.
   snippets).
 - `concurrency` group prevents cache races; cache commits carry `[skip ci]`;
   `-max-findings-budget` caps run cost, overflow deferred to the next run.
-- Public-repo posture: findings/report kept in artifacts, not logs; API key
-  only via secrets (unreachable from fork context); default-deny
-  `permissions:` with per-job elevation.
+- Public-repo posture: findings/report kept in artifacts, not logs; no LLM
+  secret in CI at all (local model), so nothing to leak to fork context;
+  default-deny `permissions:` with per-job elevation.
 
 ## Bootstrap (first run)
 

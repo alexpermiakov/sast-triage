@@ -22,8 +22,9 @@ internal/
   agent/             the LLM loop: client, tools, budgets, verdict parsing.
                      Provider adapters behind one Client iface: openai.go (any
                      OpenAI-compatible endpoint, net/http only — the default)
-                     and anthropic.go (native SDK). Default provider is openai
-                     → local Ollama, so nothing leaves the machine by default.
+                     and anthropic.go (native SDK). Default provider is openai;
+                     its -base-url is required (no default) so the tool only
+                     talks to the endpoint the operator names.
   report/            triage-report.md rendering, GitHub issue bodies
   github/            minimal Issues REST client (dedupe owned by cache issueRef)
   pipeline/          run orchestration: partition, budget, errgroup fan-out,

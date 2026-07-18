@@ -61,7 +61,10 @@ jobs:
           opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
 
       - name: Triage — fail only on NEW exploitable findings
-        run: sast-triage -sarif findings.sarif -repo . -model qwen2.5-coder:7b -fail-on-new-exploitable
+        run: |
+          sast-triage -sarif findings.sarif -repo . \
+            -base-url http://localhost:11434/v1 -model qwen2.5-coder:7b \
+            -fail-on-new-exploitable
 ```
 
 Prefer Claude (or any hosted model)? Add `-provider anthropic` with an `ANTHROPIC_API_KEY` secret, or `-base-url https://api.openai.com/v1` with `OPENAI_API_KEY` — the tool is the same, only the endpoint changes.
@@ -70,7 +73,7 @@ Swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep
 
 ## Run it directly
 
-For a one-off triage outside CI. **By default nothing leaves your machine** — the agent talks to a local model:
+For a one-off triage outside CI. The tool never invents an endpoint — you always name where the model is with `-base-url`, so nothing is sent anywhere you didn't specify (point it at local Ollama and nothing leaves your machine):
 
 ```bash
 go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
@@ -80,10 +83,12 @@ go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
 git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/opengrep-rules
 opengrep scan -f /tmp/opengrep-rules/go --sarif --dataflow-traces --output findings.sarif
 
-# 2. Triage with a local model via Ollama (the default provider/base-url)
+# 2. Triage with a local model via Ollama. -provider openai is the default;
+#    -base-url and -model are always explicit — the tool never invents an endpoint.
 ollama serve &                        # http://localhost:11434
 ollama pull qwen2.5-coder:7b
-sast-triage -sarif findings.sarif -repo . -model qwen2.5-coder:7b
+sast-triage -sarif findings.sarif -repo . \
+  -base-url http://localhost:11434/v1 -model qwen2.5-coder:7b
 
 cat triage-report.md
 ```
@@ -92,7 +97,7 @@ Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this — it
 
 ### Providers
 
-`-provider openai` (the default) speaks the OpenAI chat-completions API, so it works with **any** OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, or OpenAI itself — via `-base-url` and `-model`. The default `-base-url` is `http://localhost:11434/v1` (local Ollama), so your code never reaches a hosted service unless you point it at one. For OpenAI proper, set `-base-url https://api.openai.com/v1` and export `OPENAI_API_KEY`.
+`-provider openai` (the default) speaks the OpenAI chat-completions API, so it works with **any** OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, or OpenAI itself. Both `-base-url` and `-model` are required and have no defaults: the tool only ever talks to the host you name. Local Ollama: `-base-url http://localhost:11434/v1`. OpenAI proper: `-base-url https://api.openai.com/v1` plus `OPENAI_API_KEY`.
 
 For Claude, use `-provider anthropic` (defaults `-model` to `claude-sonnet-5`) and export `ANTHROPIC_API_KEY`:
 
@@ -106,7 +111,7 @@ sast-triage -provider anthropic -sarif findings.sarif -repo .
 | Flag                       | Default           | Purpose                                          |
 | -------------------------- | ----------------- | ------------------------------------------------ |
 | `-provider`                | `openai`          | `openai` (any OpenAI-compatible endpoint) or `anthropic` |
-| `-base-url`                | `…:11434/v1`      | OpenAI-compatible endpoint (default: local Ollama) |
+| `-base-url`                | —                 | OpenAI-compatible endpoint; required for `openai` (no default), e.g. `http://localhost:11434/v1` |
 | `-model`                   | —                 | Model name; required for `openai`, defaults to `claude-sonnet-5` for `anthropic` |
 | `-effort`                  | `medium`          | Depth: `small`, `medium`, `large`                |
 | `-max-findings-budget`     | `50`              | Max findings triaged per run                     |
