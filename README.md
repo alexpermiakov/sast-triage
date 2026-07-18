@@ -1,11 +1,14 @@
 # 🔍 SAST Triage Agent
 
 [![CI](https://github.com/alexpermiakov/sast-triage/actions/workflows/ci.yml/badge.svg)](https://github.com/alexpermiakov/sast-triage/actions/workflows/ci.yml)
+[![Triage](https://github.com/alexpermiakov/sast-triage/actions/workflows/triage.yml/badge.svg)](https://github.com/alexpermiakov/sast-triage/actions/workflows/triage.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/alexpermiakov/sast-triage)](https://goreportcard.com/report/github.com/alexpermiakov/sast-triage)
+[![SARIF 2.1.0](https://img.shields.io/badge/SARIF-2.1.0-blue.svg?logo=owasp&logoColor=white)](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**You turned on a SAST scanner — Semgrep, CodeQL, SonarQube — got 400 findings, and turned it off.** Most were false positives; nobody had time to check.
+**You turned on a SAST scanner — Semgrep, CodeQL, SonarQube — got 400 findings, and turned it off.** Most were false positives; nobody had time to check. The vendors know it — AI triage now ships in their paid tiers at $25–30 per developer per month (Semgrep Teams, GitHub Code Security, Snyk): a 50-developer shop pays $15k–18k a year, before the "contact sales" enterprise tier.
 
-`sast-triage` does what a security analyst would: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. PRs fail only on _new exploitable_ findings. Verdicts are cached in git, keyed to the evidence they cite, and approved by humans via PR. After the first run, triage costs ~$0.
+`sast-triage` does the same job without the seat license — MIT, one Go binary, bring your own model (local Ollama = $0, or your Claude API key). It does what a security analyst would: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. PRs fail only on _new exploitable_ findings. Verdicts are cached in git, keyed to the evidence they cite, and approved by humans via PR. After the first run, triage costs ~$0.
 
 ### How it works
 
