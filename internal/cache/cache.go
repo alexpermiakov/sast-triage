@@ -98,7 +98,7 @@ func (c *Cache) Save(path string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("save cache: %w", err)
 	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
 		return fmt.Errorf("save cache: %w", err)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
