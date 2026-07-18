@@ -27,11 +27,9 @@ graph LR
 - Three-valued verdicts (no unsafe defaults)
 - Cache invalidation on code change
 
-**What about prompt injection — a comment claiming "this is safe"?** Repo content enters the prompt as evidence, never as instructions. A `benign` verdict requires cited `file:line` evidence that the tool re-verifies — prose claims don't meet the bar. The worst case for a fooled model is a wrong verdict, and the dangerous direction (false `benign`) demands the most proof, is human-approved in a PR, and auto-expires when any cited line changes.
+## Quick Start
 
-## Quick Start: CI
-
-One job: your scanner produces `findings.sarif`, `sast-triage` reads the code behind each finding, and the PR fails only on **new exploitable** ones. Pick a model — the tool is identical, only the flags change:
+One job: your scanner produces `findings.sarif`, `sast-triage` reads the code behind each finding, and the PR fails only on **new exploitable** ones. Pick a model — or skip CI and run it straight from your terminal:
 
 <details open>
 <summary><b>Claude</b> — best verdicts; what this repo runs on itself</summary>
@@ -118,56 +116,58 @@ Any scanner that emits SARIF 2.1.0 works; opengrep is what's tested. Paste this 
 
 </details>
 
-Want to see real output before wiring anything up? This repo's [open alerts](https://github.com/alexpermiakov/sast-triage/security/code-scanning) and [issues](https://github.com/alexpermiakov/sast-triage/issues) come from [`demo/`](demo/) — intentionally vulnerable code we keep unfixed so the pipeline's real output is always on display. For production, copy the [workflow this repo runs on itself](.github/workflows/triage.yml): everything pinned (actions by SHA, opengrep by sha256, rules by commit), a per-run model picker (Anthropic or any OpenAI-compatible endpoint via `workflow_dispatch`), plus a push-to-main job that files issues for exploitables, uploads triaged results to the Security tab, and maintains the cache review PR — merging that PR is what makes later runs cache hits.
+<details>
+<summary><b>Run it directly</b> — one-off triage outside CI</summary>
 
-## Run it directly
-
-For a one-off triage outside CI. The tool never invents an endpoint — you always name where the model is with `-base-url`, so nothing is sent anywhere you didn't specify (point it at local Ollama and nothing leaves your machine):
+Nothing is sent anywhere you didn't name: `-base-url` is always explicit, so pointing it at local Ollama keeps everything on your machine.
 
 ```bash
 go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
 
-# 1. Scan — anything emitting SARIF 2.1.0 with stable fingerprints works;
-#    opengrep (binary: github.com/opengrep/opengrep/releases) is what's tested
-git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/opengrep-rules
-opengrep scan -f /tmp/opengrep-rules/go --sarif --dataflow-traces --output findings.sarif
+# 1. Scan — anything emitting SARIF 2.1.0 works; opengrep is what's tested
+git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
+opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
 
-# 2. Triage with a local model via Ollama. -provider openai is the default;
-#    -base-url and -model are always explicit — the tool never invents an endpoint.
+# 2. Triage — local model via Ollama…
 ollama serve &                        # http://localhost:11434
 ollama pull qwen2.5-coder:7b
 sast-triage -sarif findings.sarif -repo . \
   -base-url http://localhost:11434/v1 -model qwen2.5-coder:7b
+
+#    …or Claude
+sast-triage -provider anthropic -sarif findings.sarif -repo .   # needs ANTHROPIC_API_KEY
 
 cat triage-report.md
 ```
 
 Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this — it's the agent's memory). Requires Go 1.22+.
 
-### Providers
+</details>
 
-`-provider openai` (the default) speaks the OpenAI chat-completions API, so it works with **any** OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, or OpenAI itself. Both `-base-url` and `-model` are required and have no defaults: the tool only ever talks to the host you name. Local Ollama: `-base-url http://localhost:11434/v1`. OpenAI proper: `-base-url https://api.openai.com/v1` plus `OPENAI_API_KEY`.
-
-For Claude, use `-provider anthropic` (defaults `-model` to `claude-sonnet-5`) and export `ANTHROPIC_API_KEY`:
-
-```bash
-sast-triage -provider anthropic -sarif findings.sarif -repo .
-```
+Want to see real output before wiring anything up? This repo's [open alerts](https://github.com/alexpermiakov/sast-triage/security/code-scanning) and [issues](https://github.com/alexpermiakov/sast-triage/issues) come from [`demo/`](demo/) — intentionally vulnerable code we keep unfixed so the pipeline's real output is always on display. For production, copy the [workflow this repo runs on itself](.github/workflows/triage.yml): everything pinned (actions by SHA, opengrep by sha256, rules by commit), a per-run model picker (Anthropic or any OpenAI-compatible endpoint via `workflow_dispatch`), plus a push-to-main job that files issues for exploitables, uploads triaged results to the Security tab, and maintains the cache review PR — merging that PR is what makes later runs cache hits.
 
 <details>
 <summary><strong>Flags</strong></summary>
 
-| Flag                       | Default           | Purpose                                          |
-| -------------------------- | ----------------- | ------------------------------------------------ |
-| `-provider`                | `openai`          | `openai` (any OpenAI-compatible endpoint) or `anthropic` |
-| `-base-url`                | —                 | OpenAI-compatible endpoint; required for `openai` (no default), e.g. `http://localhost:11434/v1` |
-| `-model`                   | —                 | Model name; required for `openai`, defaults to `claude-sonnet-5` for `anthropic` |
-| `-effort`                  | `medium`          | Depth: `small`, `medium`, `large`                |
-| `-max-findings-budget`     | `50`              | Max findings triaged per run                     |
-| `-fail-on-new-exploitable` | off               | Exit 3 if any new exploitable found              |
-| `-parallel`                | `4`               | Concurrent findings                              |
-| `-create-issues`           | off               | File GitHub issues for exploitable findings      |
-| `-link-base`               | —                 | E.g., `https://github.com/owner/repo/blob/<sha>` |
+| Flag                       | Default               | Purpose                                          |
+| -------------------------- | --------------------- | ------------------------------------------------ |
+| `-provider`                | `openai`              | `openai` (any OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, OpenAI itself) or `anthropic` |
+| `-base-url`                | —                     | Endpoint for `openai`; **required, no default** — the tool only ever talks to the host you name |
+| `-model`                   | —                     | Required for `openai`; defaults to `claude-sonnet-5` for `anthropic` |
+| `-sarif`                   | `findings.sarif`      | SARIF 2.1.0 input                                |
+| `-repo`                    | `.`                   | Repository root the findings refer to            |
+| `-cache`                   | `triage-cache.json`   | Verdict cache (commit it to git)                 |
+| `-report`                  | `triage-report.md`    | Markdown report output                           |
+| `-triaged-sarif`           | —                     | Verdict-annotated SARIF copy for Code Scanning upload |
+| `-effort`                  | `medium`              | Depth: `small`, `medium`, `large`                |
+| `-max-findings-budget`     | `50`                  | Max findings triaged per run (0 = unlimited)     |
+| `-parallel`                | `4`                   | Concurrent findings                              |
+| `-fail-on-new-exploitable` | off                   | Exit 3 if any new exploitable found — PR gating  |
+| `-create-issues`           | off                   | File GitHub issues for exploitables (needs `GITHUB_TOKEN`) |
+| `-github-repo`             | `$GITHUB_REPOSITORY`  | `owner/name` for issue creation                  |
+| `-link-base`               | —                     | E.g., `https://github.com/owner/repo/blob/<sha>` |
+
+API keys come from the environment: `ANTHROPIC_API_KEY` for `anthropic`, `OPENAI_API_KEY` for hosted OpenAI-compatible endpoints (local ones need none). Fine-tuning: `-max-iterations` and `-token-budget` override the `-effort` preset; `-issue-label` and `-issue-title-prefix` customize filed issues.
 
 **Effort presets** (scale per-finding budgets):
 
@@ -202,6 +202,13 @@ Typical finding: 2k–6k tokens. Bootstrap is expensive; everything after is che
 ## FAQ
 
 <details>
+<summary><strong>What about prompt injection — a comment claiming "this is safe"?</strong></summary>
+
+Repo content enters the prompt as evidence, never as instructions. A `benign` verdict requires cited `file:line` evidence that the tool re-verifies — prose claims don't meet the bar. The worst case for a fooled model is a wrong verdict, and the dangerous direction (false `benign`) demands the most proof, is human-approved in a PR, and auto-expires when any cited line changes.
+
+</details>
+
+<details>
 <summary><strong>Why commit the cache to git?</strong></summary>
 
 - Per-finding granularity (vs. ignore files and inline suppression comments)
@@ -229,22 +236,6 @@ Any OpenAI-compatible endpoint out of the box (`-provider openai`, the default):
 <summary><strong>Why doesn't the agent write fixes?</strong></summary>
 
 Scope. Triage is a judgment task with a verifiable output contract. Write access would turn a wrong verdict into a wrong commit. Judgment only.
-
-</details>
-
-## Development
-
-<details>
-<summary><strong>Testing & Architecture</strong></summary>
-
-```bash
-go vet ./...
-go test -race ./...
-```
-
-- Pure packages (`sarif`, `cache`, `report`) are table-tested against fixtures
-- `internal/agent` uses a fake client replaying scripted tool-use transcripts
-- Architecture decisions: [docs/DESIGN.md](docs/DESIGN.md)
 
 </details>
 
