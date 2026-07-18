@@ -9,7 +9,7 @@
 
 The vendors know it — AI triage now ships in their paid tiers at $25–30 per developer per month (Semgrep Teams, GitHub Code Security, Snyk): a 50-developer shop pays $15k–18k a year, before the "contact sales" enterprise tier.
 
-`sast-triage` does the same job without the seat license — MIT, one Go binary, bring your own model (local Ollama = $0, or your Claude API key). **It does what a security analyst would**: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. PRs fail only on _new exploitable_ findings. Verdicts are cached in git, keyed to the evidence they cite, and approved by humans via PR. After the first run, triage costs ~$0.
+`sast-triage` does the same job without the seat license — MIT, one Go binary, bring your own model (local Ollama = $0, or your Claude API key). **It does what a security analyst would**: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. After the first run, triage costs ~$0.
 
 ### How it works
 
@@ -206,6 +206,13 @@ Typical finding: 2k–6k tokens. Bootstrap is expensive; everything after is che
 - ✅ **Multi-scanner support** — SARIF 2.1.0 with stable fingerprints
 
 ## FAQ
+
+<details>
+<summary><strong>What makes a PR fail, and who approves verdicts?</strong></summary>
+
+PRs fail only on _new exploitable_ findings (exit 3; the gate is on by default, `-fail-on-new-exploitable=false` turns it off). Verdicts are cached in git (`triage-cache.json`), keyed to the evidence they cite, and approved by humans via the cache review PR. The committed cache is the baseline, so pre-existing backlog never blocks a PR — only what the PR itself introduces.
+
+</details>
 
 <details>
 <summary><strong>What about prompt injection — a comment claiming "this is safe"?</strong></summary>
