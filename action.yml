@@ -6,8 +6,7 @@
 # to flags.
 name: SAST Triage
 description: >-
-  Triage SAST findings (SARIF 2.1.0) with a bounded LLM agent and an
-  evidence-keyed verdict cache. Verdicts are benign | exploitable | uncertain.
+  Triage SAST findings (SARIF 2.1.0) with a bounded LLM agent and an evidence-keyed verdict cache.
 author: alexpermiakov
 branding:
   icon: search
