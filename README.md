@@ -3,7 +3,6 @@
 [![CI](https://github.com/alexpermiakov/sast-triage/actions/workflows/ci.yml/badge.svg)](https://github.com/alexpermiakov/sast-triage/actions/workflows/ci.yml)
 [![Triage](https://github.com/alexpermiakov/sast-triage/actions/workflows/triage.yml/badge.svg)](https://github.com/alexpermiakov/sast-triage/actions/workflows/triage.yml)
 [![Go version](https://img.shields.io/github/go-mod/go-version/alexpermiakov/sast-triage)](go.mod)
-[![SARIF 2.1.0](https://img.shields.io/badge/SARIF-2.1.0-blue.svg?logo=owasp&logoColor=white)](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **You turned on a SAST scanner — Semgrep, CodeQL, SonarQube — got 400 findings, and turned it off.** Most were false positives; nobody had time to check.
@@ -145,7 +144,7 @@ sast-triage -provider anthropic -model claude-sonnet-5 \
 cat triage-report.md
 ```
 
-Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this — it's the agent's memory). Exits 3 if it decided any new exploitable — that's the PR gate doing its job; `-fail-on-new-exploitable=false` turns it off. Requires Go 1.22+.
+Outputs: `triage-report.md` (read this), `triage-cache.json` (commit this — it's the agent's memory). Exits 3 if it decided any new exploitable — that's the PR gate doing its job; `-fail-on-new-exploitable=false` turns it off. Requires Go 1.26+ (older toolchains ≥1.21 auto-download it).
 
 </details>
 
