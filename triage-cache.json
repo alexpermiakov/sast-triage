@@ -1,6 +1,23 @@
 {
   "version": 1,
   "entries": {
+    "071be1f3e229880d8c91e34cba27386981d5c27b35b9cc03d8abb4b628605c8c065122aeacd82ccf8434f50248fdaa66a12c868e3cced08f6a49bdeeccc3ee58_0": {
+      "ruleId": "opengrep-rules.go.lang.security.audit.xss.no-fprintf-to-responsewriter",
+      "file": "demo/vulnapp/vulnapp.go",
+      "verdict": "exploitable",
+      "reason": "The handler writes `item` (a string value read from the orders table) directly into the HTTP response via fmt.Fprintf without any HTML escaping (vulnapp.go:33). The value reaching that Fprintf is DB content whose retrieval is itself driven by an unsanitized query built via fmt.Sprintf with the raw `id` query parameter (vulnapp.go:24-26), a query the file's own do-not-fix docstring confirms is intentionally vulnerable to injection. Because the SQL query is attacker-influenceable and the resulting `item` string is written straight to http.ResponseWriter with no output encoding, any HTML/script content persisted in or coerced into the `item` column (or reachable via the SQL injection point) will be rendered unescaped to the client, producing a reflected/stored XSS. No html/template or equivalent escaping is applied anywhere between the DB read and the Fprintf call.",
+      "evidence": [
+        "demo/vulnapp/vulnapp.go:23-33",
+        "demo/vulnapp/vulnapp.go:24",
+        "demo/vulnapp/vulnapp.go:25",
+        "demo/vulnapp/vulnapp.go:33"
+      ],
+      "codeHash": "sha256:a2a02d2d659077e603e42870b3adb9a6b8c5fb1b59c7f430cdd316a075efc60d",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-19T00:03:25Z",
+      "tokensUsed": 114214,
+      "issueRef": 37
+    },
     "161ab885ca0f0ba0c96e34c203c0c4b46517d22c0d59548569502384f3b40f78ba33136b06cb4be77355b5c48870b5e64d691496776ed23cbd11fbfc3be75cbf_0": {
       "ruleId": "opengrep-rules.go.lang.security.audit.xss.no-fprintf-to-responsewriter",
       "file": "demo/vulnapp/vulnapp.go",
