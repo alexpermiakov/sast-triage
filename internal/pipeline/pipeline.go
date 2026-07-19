@@ -71,7 +71,7 @@ type outcome struct {
 
 // Run executes one triage run. It returns an error only when the tool itself
 // fails (unreadable input, unwritable output, missing API key while work
-// remains); finding-level failures degrade to uncertain verdicts.
+// remains); finding-level failures degrade to uncertain verdicts
 func Run(ctx context.Context, cfg Config) (Summary, error) {
 	if cfg.Parallel <= 0 {
 		cfg.Parallel = 4
