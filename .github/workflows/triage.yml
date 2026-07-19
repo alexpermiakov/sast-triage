@@ -33,7 +33,7 @@ permissions:
 
 env:
   # Provider for push/PR runs (workflow_dispatch picks per run): anthropic | openai
-  TRIAGE_PROVIDER: openai
+  TRIAGE_PROVIDER: anthropic
   # Per-provider default models; the workflow_dispatch `model` input overrides.
   ANTHROPIC_MODEL: claude-sonnet-5
   OPENAI_MODEL: qwen2.5-coder:1.5b-instruct
