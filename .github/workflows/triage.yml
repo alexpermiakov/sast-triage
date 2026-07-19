@@ -33,7 +33,7 @@ permissions:
 
 env:
   # Provider for push/PR runs (workflow_dispatch picks per run): anthropic | openai
-  TRIAGE_PROVIDER: anthropic
+  TRIAGE_PROVIDER: openai
   # Per-provider default models; the workflow_dispatch `model` input overrides.
   ANTHROPIC_MODEL: claude-sonnet-5
   OPENAI_MODEL: qwen2.5-coder:1.5b-instruct
@@ -169,3 +169,4 @@ jobs:
             triaged.sarif
             triage-report.md
           retention-days: 7
+
