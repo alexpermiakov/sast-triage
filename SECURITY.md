@@ -14,6 +14,6 @@ coordinated fix and advisory credit.
 
 - **In scope:** the `sast-triage` binary (`cmd/`, `internal/`) and the
   workflows under `.github/workflows/`.
-- **Out of scope:** `demo/` and `testdata/` are intentionally vulnerable by
-  design — they are the triage pipeline's proof-of-life and test targets, not
-  defects. Please don't report findings in them.
+- **Out of scope:** `testdata/` is intentionally vulnerable by design — it is
+  the triage pipeline's test target, not a defect. Please don't report
+  findings in it.

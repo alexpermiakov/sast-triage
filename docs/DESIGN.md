@@ -153,11 +153,7 @@ returns exit code. No hidden state.
 ## CI (`.github/workflows/triage.yml`)
 
 The repo dogfoods itself: scan + triage of this codebase (excluding
-`testdata/`) on push and PR to main, plus `workflow_dispatch`. `demo/vulnapp`
-is deliberately in scope: an intentionally vulnerable package triaged for
-real, so the public repo always shows live output — open alerts and issues
-for its exploitables, dismissals for anything benign. Its findings are never
-fixed; they are the proof-of-life.
+`testdata/`) on push and PR to main, plus `workflow_dispatch`.
 
 - Triage runs a local model (default: a tiny Ollama model in a service
   container) — no API key, nothing leaves the runner. Cheap on GitHub-hosted
@@ -202,9 +198,6 @@ re-runs bootstrap.
 - Pure packages: table tests, no mocks.
 - `internal/agent`: fake client replaying scripted tool-use transcripts (see
   CLAUDE.md for the required scenarios).
-- Proof-of-life: `demo/vulnapp` flows through the full pipeline on every main
-  run (unlike `testdata/`, which is scan-excluded and short-circuited). Its
-  alerts and issues stay open by design.
 
 ## Rationale one-liners
 

@@ -239,7 +239,7 @@ Same job, different constraints. Those are good products if you're already payin
 <details>
 <summary><strong>Which languages does it support?</strong></summary>
 
-Whatever your scanner scans. The agent doesn't parse code — it reads it the way an analyst would (`read_file`, `grep_repo`), so there is no per-language support matrix: if the scanner produced a finding, it can be triaged. The demo target is Go because this repo is Go.
+Whatever your scanner scans. The agent doesn't parse code — it reads it the way an analyst would (`read_file`, `grep_repo`), so there is no per-language support matrix: if the scanner produced a finding, it can be triaged.
 
 </details>
 
