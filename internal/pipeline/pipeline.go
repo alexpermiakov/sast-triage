@@ -9,19 +9,25 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/alexpermiakov/sast-triage/internal/agent"
 	"github.com/alexpermiakov/sast-triage/internal/cache"
+	"github.com/alexpermiakov/sast-triage/internal/github"
 	"github.com/alexpermiakov/sast-triage/internal/report"
 	"github.com/alexpermiakov/sast-triage/internal/sarif"
 )
 
-// IssueCreator routes exploitable verdicts to an issue tracker.
+// IssueCreator routes exploitable verdicts to an issue tracker. ListIssues
+// lets filing adopt an already-filed issue instead of duplicating it when a
+// cache entry has no issueRef (first filing, or the run that filed it never
+// landed on this branch).
 type IssueCreator interface {
 	CreateIssue(ctx context.Context, title, body string, labels []string) (int, error)
+	ListIssues(ctx context.Context, label string) ([]github.Issue, error)
 }
 
 type Config struct {
@@ -251,11 +257,17 @@ func mergeVerdict(c *cache.Cache, cfg Config, f sarif.Finding, v agent.Verdict, 
 	*items = append(*items, it)
 }
 
-// fileIssues routes exploitable verdicts (fresh or cached) to GitHub Issues,
-// deduped by the issueRef stored in the cache entry. Failures degrade to log
-// lines; filing issues must not fail the run or lose the cache delta.
+// fileIssues routes exploitable verdicts (fresh or cached) to GitHub Issues.
+// Dedupe is owned by the cache issueRef; when an entry has none, existing
+// issues under the triage label are consulted first — matched by the
+// fingerprint marker in the body, then by title — and adopted rather than
+// re-filed. This holds even when the run that filed the issue never landed on
+// this branch (an unmerged cache review PR). Failures degrade to log lines;
+// filing issues must not fail the run or lose the cache delta.
 func fileIssues(ctx context.Context, cfg Config, c *cache.Cache, items []report.Item) int {
 	filed := 0
+	var existing []github.Issue
+	listed := false
 	for i, it := range items {
 		if it.Verdict != agent.VerdictExploitable {
 			continue
@@ -264,17 +276,50 @@ func fileIssues(ctx context.Context, cfg Config, c *cache.Cache, items []report.
 		if !ok || e.IssueRef != 0 {
 			continue
 		}
-		n, err := cfg.Issues.CreateIssue(ctx, cfg.IssueTitlePrefix+report.IssueTitle(it), report.IssueBody(it, report.Options{LinkBase: cfg.LinkBase}), []string{cfg.IssueLabel})
-		if err != nil {
-			fmt.Fprintf(cfg.Log, "failed to file issue for %s: %v\n", it.Location(), err)
-			continue
+		if !listed {
+			var err error
+			if existing, err = cfg.Issues.ListIssues(ctx, cfg.IssueLabel); err != nil {
+				// Creating blind risks exactly the duplicate storm this
+				// lookup prevents; leave issueRef 0 and let a later run file.
+				fmt.Fprintf(cfg.Log, "failed to list existing issues: %v — issue filing skipped this run\n", err)
+				return 0
+			}
+			listed = true
+		}
+
+		title := cfg.IssueTitlePrefix + report.IssueTitle(it)
+		n := adoptIssue(existing, report.FingerprintMarker(it.Fingerprint), title)
+		if n == 0 {
+			body := report.IssueBody(it, report.Options{LinkBase: cfg.LinkBase})
+			var err error
+			if n, err = cfg.Issues.CreateIssue(ctx, title, body, []string{cfg.IssueLabel}); err != nil {
+				fmt.Fprintf(cfg.Log, "failed to file issue for %s: %v\n", it.Location(), err)
+				continue
+			}
+			existing = append(existing, github.Issue{Number: n, Title: title, Body: body})
+			filed++
 		}
 		e.IssueRef = n
 		c.Entries[it.Fingerprint] = e
 		items[i].IssueRef = n
-		filed++
 	}
 	return filed
+}
+
+// adoptIssue finds the oldest existing issue for a finding: an exact
+// fingerprint-marker match in the body, or failing that the same title (two
+// fingerprints can flag the same rule at the same location).
+func adoptIssue(existing []github.Issue, marker, title string) int {
+	best := 0
+	for _, is := range existing {
+		if !strings.Contains(is.Body, marker) && is.Title != title {
+			continue
+		}
+		if best == 0 || is.Number < best {
+			best = is.Number
+		}
+	}
+	return best
 }
 
 func itemFromEntry(f sarif.Finding, e cache.Entry) report.Item {

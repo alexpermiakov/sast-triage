@@ -101,9 +101,6 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 			return Verdict{}, fmt.Errorf("triage finding %s: %w", f.Fingerprint, err)
 		}
 		tokens += resp.InputTokens + resp.OutputTokens
-		if tokens > t.cfg.TokenBudget {
-			return t.uncertain(f, tokens, fmt.Sprintf("token budget exhausted (%d used, %d allowed)", tokens, t.cfg.TokenBudget)), nil
-		}
 
 		if calls := toolCalls(resp); len(calls) > 0 {
 			msgs = append(msgs, Message{Role: "assistant", Content: resp.Content})
@@ -117,12 +114,13 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 				results = append(results, Block{Type: "tool_result", ToolUseID: c.ID, Text: out})
 			}
 			msgs = append(msgs, Message{Role: "user", Content: results})
-			continue
-		}
-
-		text := responseText(resp)
-		v, perr := parseVerdict(text)
-		if perr != nil {
+		} else {
+			text := responseText(resp)
+			v, perr := parseVerdict(text)
+			if perr == nil {
+				v.TokensUsed = tokens
+				return t.validate(v, f), nil
+			}
 			if retried {
 				return t.uncertain(f, tokens, "model did not produce a parseable verdict after retry"), nil
 			}
@@ -132,10 +130,15 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 				Message{Role: "user", Content: []Block{{Type: "text", Text: "That was not a valid verdict. Reply with ONLY the JSON object: " +
 					`{"verdict": "benign|exploitable|uncertain", "reason": "...", "evidence": ["path:line"]}`}}},
 			)
-			continue
 		}
-		v.TokensUsed = tokens
-		return t.validate(v, f), nil
+
+		// The budget gates continuing, not finishing. Every further call
+		// re-sends the whole conversation, so it costs at least this call's
+		// input again plus up to MaxTokensPerCall of output — stop before
+		// issuing a call that would blow the budget, not after.
+		if tokens+resp.InputTokens+t.cfg.MaxTokensPerCall > t.cfg.TokenBudget {
+			return t.uncertain(f, tokens, fmt.Sprintf("token budget exhausted (%d of %d tokens used; the next call would exceed the budget)", tokens, t.cfg.TokenBudget)), nil
+		}
 	}
 
 	return t.uncertain(f, tokens, fmt.Sprintf("iteration cap (%d) reached without a verdict", maxIter)), nil

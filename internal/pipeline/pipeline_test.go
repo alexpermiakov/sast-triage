@@ -13,6 +13,7 @@ import (
 
 	"github.com/alexpermiakov/sast-triage/internal/agent"
 	"github.com/alexpermiakov/sast-triage/internal/cache"
+	"github.com/alexpermiakov/sast-triage/internal/github"
 )
 
 const (
@@ -48,12 +49,20 @@ func textResp(text string) *agent.Response {
 }
 
 type fakeIssues struct {
-	titles []string
+	titles   []string
+	bodies   []string
+	existing []github.Issue
+	listErr  error
 }
 
-func (f *fakeIssues) CreateIssue(_ context.Context, title, _ string, _ []string) (int, error) {
+func (f *fakeIssues) CreateIssue(_ context.Context, title, body string, _ []string) (int, error) {
 	f.titles = append(f.titles, title)
+	f.bodies = append(f.bodies, body)
 	return 76 + len(f.titles), nil
+}
+
+func (f *fakeIssues) ListIssues(_ context.Context, _ string) ([]github.Issue, error) {
+	return f.existing, f.listErr
 }
 
 func baseConfig(t *testing.T, dir string) Config {
@@ -172,6 +181,99 @@ func TestRunFullThenIncremental(t *testing.T) {
 	}
 	if len(issues2.titles) != 0 {
 		t.Errorf("issue filed twice: %v", issues2.titles)
+	}
+}
+
+// TestRunAdoptsExistingIssueWhenCacheLostRef replays the duplicate-issue
+// incident: a run files an issue, but its cache delta (carrying the issueRef)
+// never lands on the branch — the review PR is unmerged. The next run
+// re-triages from scratch and must adopt the existing issue, not file a copy.
+func TestRunAdoptsExistingIssueWhenCacheLostRef(t *testing.T) {
+	sqliVerdict := `{"verdict": "exploitable", "reason": "id flows unsanitized to QueryRow", "evidence": ["app/handlers.go:16", "app/handlers.go:17-18"]}`
+	secretVerdict := `{"verdict": "benign", "reason": "sample credential in demo code", "evidence": ["app/config.go:7"]}`
+
+	first := baseConfig(t, t.TempDir())
+	first.Client = &fakeClient{responses: []*agent.Response{textResp(sqliVerdict), textResp(secretVerdict)}}
+	firstIssues := &fakeIssues{}
+	first.Issues = firstIssues
+	if _, err := Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstIssues.titles) != 1 {
+		t.Fatalf("first run filed %d issues, want 1", len(firstIssues.titles))
+	}
+
+	// Second run: fresh cache dir (the delta never merged), but the issue
+	// exists on GitHub. Adopt #77 via the fingerprint marker in its body.
+	second := baseConfig(t, t.TempDir())
+	second.Client = &fakeClient{responses: []*agent.Response{textResp(sqliVerdict), textResp(secretVerdict)}}
+	secondIssues := &fakeIssues{existing: []github.Issue{
+		{Number: 77, Title: firstIssues.titles[0], Body: firstIssues.bodies[0]},
+	}}
+	second.Issues = secondIssues
+
+	s, err := Run(context.Background(), second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondIssues.titles) != 0 || s.IssuesFiled != 0 {
+		t.Errorf("duplicate filed: created %v, summary %+v", secondIssues.titles, s)
+	}
+	c, _ := cache.Load(second.CachePath)
+	sqli := c.Entries["0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9_0"]
+	if sqli.IssueRef != 77 {
+		t.Errorf("issueRef = %d, want the adopted issue 77", sqli.IssueRef)
+	}
+}
+
+// TestRunSkipsFilingWhenListFails: creating blind risks the duplicate storm
+// the lookup prevents, so a failed list defers filing to a later run.
+func TestRunSkipsFilingWhenListFails(t *testing.T) {
+	cfg := baseConfig(t, t.TempDir())
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "exploitable", "reason": "unsanitized flow", "evidence": ["app/handlers.go:16"]}`),
+		textResp(`{"verdict": "benign", "reason": "sample credential", "evidence": ["app/config.go:7"]}`),
+	}}
+	issues := &fakeIssues{listErr: fmt.Errorf("api down")}
+	cfg.Issues = issues
+
+	s, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues.titles) != 0 || s.IssuesFiled != 0 {
+		t.Errorf("filed despite failed list: %v", issues.titles)
+	}
+	c, _ := cache.Load(cfg.CachePath)
+	sqli := c.Entries["0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9_0"]
+	if sqli.IssueRef != 0 {
+		t.Errorf("issueRef = %d, want 0 so a later run retries filing", sqli.IssueRef)
+	}
+}
+
+func TestAdoptIssue(t *testing.T) {
+	marker := "<!-- sast-triage:fingerprint:abc_0 -->"
+	title := "[sast-triage] tainted-sql-string at app/handlers.go:17"
+	existing := []github.Issue{
+		{Number: 90, Title: "unrelated", Body: "hand-filed"},
+		{Number: 78, Title: "renamed by a human", Body: "details\n" + marker + "\n"},
+		{Number: 74, Title: title, Body: "no marker, filed before markers existed"},
+	}
+	tests := map[string]struct {
+		marker, title string
+		want          int
+	}{
+		"marker match survives retitling": {marker, "some new title", 78},
+		"title match without marker":      {"<!-- sast-triage:fingerprint:zzz_0 -->", title, 74},
+		"both match: oldest wins":         {marker, title, 74},
+		"no match":                        {"<!-- sast-triage:fingerprint:zzz_0 -->", "nope", 0},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := adoptIssue(existing, tc.marker, tc.title); got != tc.want {
+				t.Errorf("adoptIssue = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 

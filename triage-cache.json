@@ -1,17 +1,6 @@
 {
   "version": 1,
   "entries": {
-    "071be1f3e229880d8c91e34cba27386981d5c27b35b9cc03d8abb4b628605c8c065122aeacd82ccf8434f50248fdaa66a12c868e3cced08f6a49bdeeccc3ee58_0": {
-      "ruleId": "opengrep-rules.go.lang.security.audit.xss.no-fprintf-to-responsewriter",
-      "file": "demo/vulnapp/vulnapp.go",
-      "verdict": "uncertain",
-      "reason": "token budget exhausted (114082 used, 60000 allowed)",
-      "evidence": null,
-      "codeHash": "sha256:2d819a60fd2fa075ff830163f500b8656c14aeeaadf09cbe4de9632b217e1f4a",
-      "model": "claude-sonnet-5",
-      "decidedAt": "2026-07-18T19:17:00Z",
-      "tokensUsed": 114082
-    },
     "161ab885ca0f0ba0c96e34c203c0c4b46517d22c0d59548569502384f3b40f78ba33136b06cb4be77355b5c48870b5e64d691496776ed23cbd11fbfc3be75cbf_0": {
       "ruleId": "opengrep-rules.go.lang.security.audit.xss.no-fprintf-to-responsewriter",
       "file": "demo/vulnapp/vulnapp.go",

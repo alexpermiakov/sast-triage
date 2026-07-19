@@ -11,7 +11,9 @@ AI triage for this already exists — Semgrep Teams, GitHub Code Security, and S
 
 `sast-triage` does the same job without the per-developer fee — MIT licence, one Go binary, bring your own model (local Ollama = $0, or your Claude API key).
 
-**It does what a security analyst would**: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. After the first run, triage costs ~$0.
+**It does what a security analyst would**: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. Nothing is suppressed on the model's word alone: every `benign` verdict lands as a reviewable PR diff, and a human merges it. After the first run, triage costs ~$0.
+
+<!-- TODO(launch): hero screenshot — Actions run summary of the real-project eval run, showing the report header + one benign verdict with evidence -->
 
 ## How it works
 
@@ -145,11 +147,14 @@ cat triage-report.md
 
 For production, start from the [workflow this repo runs on itself](.github/workflows/triage.yml).
 
-## Features
+## What you get
 
-- ✅ **PR gate** — fails only on _new_ exploitable findings; the pre-existing backlog never blocks a merge
-- ✅ **Human-approved verdicts** — cache updates land in a single review PR
+The headline behavior is the **PR gate**: the check fails (exit 3) only on _new_ exploitable findings — the 400-finding backlog is baselined in the committed cache and never blocks a merge again. Around it:
+
+- ✅ **A triage report** (`triage-report.md`, also published to the Actions run summary) — every verdict with its reasoning and clickable `file:line` evidence, proposed suppressions first so vetoing one is a 30-second action
+- ✅ **Human-approved verdicts** — cache updates land in a single review PR; nothing is suppressed until a human merges it
 - ✅ **Security tab integration** — triaged SARIF uploads to GitHub Code Scanning; benign findings arrive dismissed, with the reason as justification
+- ✅ **GitHub issues for confirmed vulnerabilities** (opt-in `-create-issues`) — one per finding, deduped across runs, with the evidence in the body
 - ✅ **Any SARIF 2.1.0 scanner** — Semgrep, CodeQL, Snyk Code, gosec, Bandit, …
 
 ## Cost Examples
@@ -197,6 +202,48 @@ The GitHub Action exposes every flag as an input of the same name, minus the lea
 ## FAQ
 
 <details>
+<summary><strong>How accurate is it?</strong></summary>
+
+<!-- TODO(launch): replace this paragraph with the real-project eval before posting:
+     "<scanner> emitted N findings on <repo>; X benign / Y exploitable / Z uncertain,
+     $C total. We hand-checked M of the benign verdicts: K correct, and here are the
+     ones it got wrong." The hand-verified benign sample is the number that matters. -->
+
+Accuracy is deliberately asymmetric. The dangerous mistake — suppressing a real vulnerability — has to clear three bars: cited `file:line` evidence the tool re-verifies, a human merging the cache review PR, and a codeHash that expires the verdict the moment any cited line changes. The cheap mistake — `uncertain` on something a human could resolve — costs a retry, not a missed vuln. A weaker model shifts verdicts toward `uncertain`, never toward silent `benign`.
+
+</details>
+
+<details>
+<summary><strong>What if it marks a real vulnerability benign?</strong></summary>
+
+Three independent layers have to fail at once:
+
+- the verdict needs cited `file:line` evidence that the tool re-verifies — no evidence, no `benign`; ambiguity becomes `uncertain`, which never suppresses
+- the suppression takes effect only after a human merges the cache review PR, where it appears as a readable diff with the reasoning inline
+- any change to a cited line breaks the codeHash and expires the verdict — a wrong verdict doesn't outlive the code it misjudged
+
+</details>
+
+<details>
+<summary><strong>Why not Semgrep Assistant or GitHub Code Security's AI triage?</strong></summary>
+
+Same job, different constraints. Those are good products if you're already paying for the tier that includes them. This exists for everyone else:
+
+- $0 per developer — MIT licence, runs as a step in the CI you already have
+- bring your own model, including a local one — code never has to leave your runner
+- verdicts live in your repo as a reviewable git history, not in a vendor dashboard
+- consumes any SARIF scanner's output, not one vendor's
+
+</details>
+
+<details>
+<summary><strong>Which languages does it support?</strong></summary>
+
+Whatever your scanner scans. The agent doesn't parse code — it reads it the way an analyst would (`read_file`, `grep_repo`), so there is no per-language support matrix: if the scanner produced a finding, it can be triaged. The demo target is Go because this repo is Go.
+
+</details>
+
+<details>
 <summary><strong>What makes a PR fail, and who approves verdicts?</strong></summary>
 
 PRs fail only on _new exploitable_ findings (exit 3; the gate is on by default, `-fail-on-new-exploitable=false` turns it off). Verdicts are cached in git (`triage-cache.json`), keyed to the evidence they cite, and approved by humans via the cache review PR. The committed cache is the baseline, so pre-existing backlog never blocks a PR — only what the PR itself introduces.
@@ -231,6 +278,8 @@ No. It consumes SARIF 2.1.0 from any scanner. opengrep and semgrep are what's te
 <summary><strong>Which models can I use?</strong></summary>
 
 Any OpenAI-compatible endpoint out of the box (`-provider openai`, the default): Ollama, vLLM, LM Studio, or OpenAI itself — pick with `-base-url` and `-model`. Claude via `-provider anthropic`. Both are thin adapters over a one-method `Client` interface ([`internal/agent/client.go`](internal/agent/client.go)); a new provider is one file implementing `Complete`. The verdict logic is fail-closed, so a weaker local model produces more `uncertain` verdicts, never silent `benign` ones — and the cache records which model decided each verdict.
+
+Honest quality guidance: `claude-sonnet-5` is what this repo's CI uses and what produced the verdicts in [triage-cache.json](triage-cache.json). The tiny CPU model in the local-model demo (`qwen2.5-coder:1.5b`) proves the plumbing, not the judgment — expect mostly `uncertain` from it. Triaging locally for real means the biggest code model your hardware runs, and still budgeting for more `uncertain` verdicts than a frontier model leaves behind.
 
 </details>
 

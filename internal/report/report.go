@@ -74,7 +74,7 @@ func Render(items []Item, opts Options) string {
 	section(&b, "Exploitable", exploitable, opts,
 		"Also routed to GitHub Issues. PRs approve suppressions; issues own vulnerabilities.")
 	section(&b, "Uncertain", uncertain, opts,
-		"No verdict met the evidence bar. These stay unsuppressed and will be retried when code or budget changes.")
+		"No verdict met the evidence bar. These stay unsuppressed and are retried when the flagged code changes (or after the cache entry is deleted).")
 
 	return b.String()
 }
@@ -116,6 +116,13 @@ func IssueTitle(it Item) string {
 	return fmt.Sprintf("[sast-triage] %s at %s", shortRule(it.RuleID), it.Location())
 }
 
+// FingerprintMarker is the machine-readable marker embedded in every issue
+// body, linking the issue back to its cache entry — and letting issue filing
+// recognize an already-filed finding when the cache lost its issueRef.
+func FingerprintMarker(fingerprint string) string {
+	return fmt.Sprintf("<!-- sast-triage:fingerprint:%s -->", fingerprint)
+}
+
 // IssueBody renders the GitHub issue body for an exploitable finding. The
 // fingerprint marker makes issues greppable back to cache entries.
 func IssueBody(it Item, opts Options) string {
@@ -131,7 +138,7 @@ func IssueBody(it Item, opts Options) string {
 			fmt.Fprintf(&b, "- %s\n", link(ref, opts))
 		}
 	}
-	fmt.Fprintf(&b, "\n<!-- sast-triage:fingerprint:%s -->\n", it.Fingerprint)
+	fmt.Fprintf(&b, "\n%s\n", FingerprintMarker(it.Fingerprint))
 	return b.String()
 }
 

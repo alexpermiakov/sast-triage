@@ -251,6 +251,29 @@ func TestTokenBudgetExhaustion(t *testing.T) {
 	}
 }
 
+// TestTokenBudgetStopsBeforeOvershoot pins the predictive stop: every
+// continuation re-sends the whole conversation, so once a repeat of the last
+// call cannot fit in the budget the loop must stop — while still under budget,
+// not one giant call past it.
+func TestTokenBudgetStopsBeforeOvershoot(t *testing.T) {
+	grow := toolUseResp("t1", "read_file", map[string]any{"path": "app/handlers.go"})
+	grow.InputTokens = 6000 // conversation already large: a repeat blows the 10k budget
+	client := &fakeClient{responses: []*Response{grow}}
+	v, err := newTriager(t, client, Config{TokenBudget: 10000}).TriageFinding(context.Background(), sqliFinding(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Verdict != VerdictUncertain || !strings.Contains(v.Reason, "token budget") {
+		t.Errorf("got %s (%q), want uncertain on token budget", v.Verdict, v.Reason)
+	}
+	if len(client.requests) != 1 {
+		t.Errorf("made %d calls, want 1: the loop must not issue a call that cannot fit", len(client.requests))
+	}
+	if v.TokensUsed > 10000 {
+		t.Errorf("tokensUsed = %d exceeds the 10k budget — predictive stop failed", v.TokensUsed)
+	}
+}
+
 func TestTestFileShortCircuit(t *testing.T) {
 	findings, err := sarif.ParseFile("../../testdata/findings.sarif")
 	if err != nil {

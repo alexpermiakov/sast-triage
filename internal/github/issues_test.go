@@ -39,6 +39,45 @@ func TestCreateIssue(t *testing.T) {
 	}
 }
 
+func TestListIssues(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/r/issues" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		q := r.URL.Query()
+		if q.Get("state") != "all" || q.Get("labels") != "security/triage-confirmed" {
+			t.Errorf("query = %s (closed issues must dedupe too)", r.URL.RawQuery)
+		}
+		if q.Get("page") != "1" {
+			// A short first page must end pagination.
+			t.Errorf("unexpected page %s", q.Get("page"))
+		}
+		w.Write([]byte(`[
+			{"number": 78, "title": "real issue", "body": "<!-- sast-triage:fingerprint:abc_0 -->"},
+			{"number": 79, "title": "a PR, not an issue", "body": "", "pull_request": {"url": "x"}}
+		]`))
+	}))
+	defer srv.Close()
+
+	issues, err := NewForTest(srv.URL).ListIssues(context.Background(), "security/triage-confirmed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) != 1 || issues[0].Number != 78 || issues[0].Body == "" {
+		t.Errorf("issues = %+v, want just #78 with body (PRs skipped)", issues)
+	}
+}
+
+func TestListIssuesHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"message":"nope"}`, http.StatusForbidden)
+	}))
+	defer srv.Close()
+	if _, err := NewForTest(srv.URL).ListIssues(context.Background(), "l"); err == nil {
+		t.Fatal("want error on non-200")
+	}
+}
+
 func TestCreateIssueHTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"message":"Validation Failed"}`, http.StatusUnprocessableEntity)

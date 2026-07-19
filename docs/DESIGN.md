@@ -129,8 +129,13 @@ returns exit code. No hidden state.
   elsewhere, e.g. Jira; it is also the fallback surface where Code Scanning
   is unavailable): exploitable findings are ADDITIONALLY routed to GitHub
   Issues (one per finding, deduped by fingerprint, `issueRef` stored in cache
-  entry, label `security/triage-confirmed`). PRs approve suppressions; issues
-  own vulnerabilities.
+  entry, label `security/triage-confirmed`). Dedupe is owned by the cache
+  issueRef, but the cache delta travels via a review PR — until it merges, the
+  branch's cache has no issueRef. So before filing, existing issues under the
+  label (open AND closed, bounded pagination) are consulted and adopted by the
+  fingerprint marker in the body, else by deterministic title; if the listing
+  fails, filing is skipped for the run rather than risking duplicates. PRs
+  approve suppressions; issues own vulnerabilities.
 - With `-triaged-sarif <path>`: a verdict-annotated copy of the input SARIF —
   every triaged result gains a `properties.triage` bag (verdict, reason,
   evidence); benign results also gain a SARIF suppression (kind `external`,
