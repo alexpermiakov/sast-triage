@@ -117,9 +117,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
-      - name: Publish report to run summary
+      # The digest, not the report: the step summary caps at 1 MiB, and a large
+      # backlog blows past that. The complete report rides in the artifact.
+      - name: Publish digest to run summary
         if: always()
-        run: '[ -f triage-report.md ] && cat triage-report.md >> "$GITHUB_STEP_SUMMARY" || true'
+        run: '[ -f triage-digest.md ] && cat triage-digest.md >> "$GITHUB_STEP_SUMMARY" || true'
 
       - name: Refresh cache review PR
         if: github.event_name != 'pull_request'
@@ -136,9 +138,11 @@ jobs:
           git add triage-cache.json
           git commit -m "chore(triage): verdict cache update $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
           git push -f origin "$BRANCH"
+          # Digest again: PR bodies cap at 65,536 characters, tighter than the
+          # step summary. The cache delta in the diff is the reviewable part.
           if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
-            gh pr edit "$BRANCH" --body-file triage-report.md
-          elif ! gh pr create --head "$BRANCH" --title "SAST triage: verdict cache update" --body-file triage-report.md; then
+            gh pr edit "$BRANCH" --body-file triage-digest.md
+          elif ! gh pr create --head "$BRANCH" --title "SAST triage: verdict cache update" --body-file triage-digest.md; then
             echo "::error::Enable Settings → Actions → General → 'Allow GitHub Actions to create and approve pull requests'."
             exit 1
           fi
@@ -152,5 +156,6 @@ jobs:
             findings.sarif
             triaged.sarif
             triage-report.md
+            triage-digest.md
           retention-days: 7
 

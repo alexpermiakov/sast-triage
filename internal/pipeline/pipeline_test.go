@@ -298,8 +298,61 @@ func TestRunBudgetDefersLowSeverity(t *testing.T) {
 		t.Errorf("cache entries = %d; deferred findings must NOT be cached", len(c.Entries))
 	}
 	md, _ := os.ReadFile(cfg.ReportPath)
-	if !strings.Contains(string(md), "deferred: run budget") {
-		t.Error("report must mark deferred findings")
+	if !strings.Contains(string(md), "## Deferred — not triaged this run (1)") {
+		t.Errorf("report must mark deferred findings:\n%s", md)
+	}
+}
+
+// The digest is what CI publishes to size-capped surfaces, so an empty or
+// missing one is a silently broken run summary.
+func TestRunWritesBoundedDigest(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseConfig(t, dir)
+	cfg.DigestPath = filepath.Join(dir, "triage-digest.md")
+	cfg.DigestBytes = 1200
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "exploitable", "reason": "id flows unsanitized to QueryRow", "evidence": ["app/handlers.go:16"]}`),
+		textResp(`{"verdict": "benign", "reason": "sample credential in demo code", "evidence": ["app/config.go:7"]}`),
+	}}
+
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	digest, err := os.ReadFile(cfg.DigestPath)
+	if err != nil {
+		t.Fatalf("digest not written: %v", err)
+	}
+	if len(digest) > cfg.DigestBytes {
+		t.Errorf("digest is %d bytes, over the %d cap", len(digest), cfg.DigestBytes)
+	}
+	if !strings.Contains(string(digest), "## Exploitable") {
+		t.Errorf("digest must carry the exploitable finding:\n%s", digest)
+	}
+	// The full report stays complete regardless of the digest's cap.
+	report, err := os.ReadFile(cfg.ReportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(report), "## Proposed suppressions") {
+		t.Errorf("report must stay complete:\n%s", report)
+	}
+}
+
+// Default: an operator who never names a digest path still gets no digest, so
+// the file only appears when asked for (the Action asks for it by default).
+func TestRunSkipsDigestWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseConfig(t, dir)
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "uncertain", "reason": "no conclusion"}`),
+		textResp(`{"verdict": "uncertain", "reason": "no conclusion"}`),
+	}}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "triage-digest.md")); !os.IsNotExist(err) {
+		t.Error("no DigestPath configured, yet a digest was written")
 	}
 }
 

@@ -7,8 +7,6 @@
 
 **You turned on a SAST scanner — Semgrep, CodeQL, SonarQube — got 400 findings, and turned it off.** Most were false positives; nobody had time to check. The AI triage that fixes that exists, but it's a paid tier: Semgrep, GitHub, and Snyk all charge $25–30 per developer per month for it — $15k–18k a year for a 50-developer team.
 
-**sast-triage does what a security analyst would**: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. No verdict suppresses anything until a human approves it. After the first run, triage costs ~$0.
-
 <!-- TODO(launch): hero screenshot — Actions run summary of the real-project eval run, showing the report header + one benign verdict with evidence -->
 
 ## How it works
@@ -63,7 +61,7 @@ jobs:
 
       - name: Publish the report
         if: always()
-        run: cat triage-report.md >> "$GITHUB_STEP_SUMMARY"
+        run: cat triage-digest.md >> "$GITHUB_STEP_SUMMARY"
 ```
 
 On a different provider? Drop `provider` and name the endpoint instead:
@@ -145,7 +143,9 @@ cat triage-report.md
 
 ## What you get
 
-Every run writes **`triage-report.md`** — every verdict with its reasoning and clickable `file:line` evidence, proposed suppressions first so vetoing one is a 30-second action. The Quick Start pipes it to the Actions run summary; that one file is where you read the results. Around it:
+Every run writes **`triage-report.md`** — every verdict with its reasoning and clickable `file:line` evidence, proposed suppressions first so vetoing one is a 30-second action. That one file is where you read the results; keep it with `actions/upload-artifact`, since it is complete and uncapped.
+
+It also writes **`triage-digest.md`**, the same verdicts bounded to 50,000 bytes — that is what the Quick Start pipes to the run summary, because GitHub drops a step summary over 1 MiB and rejects a PR body over 65,536 characters, and a 2,000-finding backlog clears both. The digest leads with exploitable rather than benign, and when findings do not fit it drops the least urgent first and says so in the footer: `_Digest truncated to fit: 320 benign omitted._` Set `digest: ""` to skip it, `digest-bytes:` to move the cap. Around these:
 
 - ✅ **A PR gate** — the check fails only on _new_ exploitable findings, so the 400-finding backlog baselined in the committed cache never blocks a merge again (on by default; `fail-on-new-exploitable: false` turns it off)
 - ✅ **Human-approved verdicts** — the run updates `triage-cache.json`; commit it from a bot branch and every suppression becomes a readable PR diff nobody can skip
@@ -189,7 +189,9 @@ The GitHub Action exposes every flag as an input of the same name, minus the lea
 | `-sarif`                   | `findings.sarif`     | SARIF 2.1.0 input                                                                               |
 | `-repo`                    | `.`                  | Repository root the findings refer to                                                           |
 | `-cache`                   | `triage-cache.json`  | Verdict cache (commit it to git)                                                                |
-| `-report`                  | `triage-report.md`   | Markdown report output                                                                          |
+| `-report`                  | `triage-report.md`   | Markdown report output — complete, uncapped                                                     |
+| `-digest`                  | `triage-digest.md`   | Size-bounded report for the step summary / a PR body; `""` skips it                             |
+| `-digest-bytes`            | `50000`              | Digest cap — clears both the 1 MiB summary and 65,536-char PR body limits                       |
 | `-triaged-sarif`           | —                    | Verdict-annotated SARIF copy for Code Scanning upload                                           |
 | `-effort`                  | `medium`             | Depth: `small`, `medium`, `large`                                                               |
 | `-max-findings-budget`     | `50`                 | Max findings triaged per run (0 = unlimited)                                                    |

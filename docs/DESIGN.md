@@ -161,9 +161,24 @@ cache backend.
 The binary's contract: reads SARIF + cache; writes report + updated cache;
 returns exit code. No hidden state.
 
-- `triage-report.md`: sorted by required human scrutiny — proposed suppressions
-  (benign) FIRST with clickable file:line evidence (veto must be a 30-second
-  action), then exploitable, then uncertain.
+- `triage-report.md`: complete and uncapped, sorted by required human scrutiny —
+  proposed suppressions (benign) FIRST with clickable file:line evidence (veto
+  must be a 30-second action), then exploitable, then uncertain. Findings the
+  run never reached (deferred) render as a compact index — location, rule,
+  severity — not full stanzas: they carry no verdict, and on a large backlog
+  they outnumber real verdicts 100:1, burying the analysis in boilerplate.
+- `triage-digest.md` (`-digest`, on by default): a byte-bounded rendering of the
+  same items for surfaces that cap size — the Actions step summary (1 MiB) and
+  PR/issue bodies (65,536 chars). Two deliberate differences from the report:
+  section order is INVERTED (exploitable first), because a capped surface must
+  lead with what cannot wait while the benign veto workflow lives in the
+  uncapped PR diff and report; and overflow is dropped by priority with the
+  footer stating what was dropped. Byte-truncating the report instead would cut
+  from the tail — keeping the proposed suppressions and discarding the
+  exploitable findings. The cap is a guarantee, not an estimate: the trailer and
+  worst-case footer are reserved before any finding is written. Rendering this
+  belongs in the binary; making each consumer parse the report's markdown to fit
+  their surface is the failure this replaces.
 - Cache delta: ALL verdict classes are written (exploitable verdicts are also
   memory — otherwise re-triaged forever).
 - With `-create-issues` (off by default — most teams track vulnerabilities

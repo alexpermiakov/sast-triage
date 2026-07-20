@@ -41,8 +41,16 @@ inputs:
     description: Verdict cache file (commit it to git)
     default: triage-cache.json
   report:
-    description: Markdown report output
+    description: Markdown report output (complete; no size cap)
     default: triage-report.md
+  digest:
+    description: >-
+      Byte-bounded digest of the report, safe to publish to the step summary
+      (1 MiB cap) or a PR/issue body (65,536 chars). Empty = skip.
+    default: triage-digest.md
+  digest-bytes:
+    description: Size cap for the digest; overflow is dropped by priority (benign first, exploitable last)
+    default: "50000"
   triaged-sarif:
     description: Write a verdict-annotated SARIF copy here for Code Scanning upload; empty = skip
     default: ""
@@ -152,6 +160,8 @@ runs:
         INPUT_REPO: ${{ inputs.repo }}
         INPUT_CACHE: ${{ inputs.cache }}
         INPUT_REPORT: ${{ inputs.report }}
+        INPUT_DIGEST: ${{ inputs.digest }}
+        INPUT_DIGEST_BYTES: ${{ inputs.digest-bytes }}
         INPUT_TRIAGED_SARIF: ${{ inputs.triaged-sarif }}
         INPUT_EFFORT: ${{ inputs.effort }}
         INPUT_MAX_FINDINGS_BUDGET: ${{ inputs.max-findings-budget }}
@@ -177,6 +187,8 @@ runs:
         if [ -n "$INPUT_PROVIDER" ]; then args+=(-provider "$INPUT_PROVIDER"); fi
         if [ -n "$INPUT_BASE_URL" ]; then args+=(-base-url "$INPUT_BASE_URL"); fi
         if [ -n "$INPUT_TRIAGED_SARIF" ]; then args+=(-triaged-sarif "$INPUT_TRIAGED_SARIF"); fi
+        args+=(-digest "$INPUT_DIGEST")
+        if [ -n "$INPUT_DIGEST_BYTES" ]; then args+=(-digest-bytes "$INPUT_DIGEST_BYTES"); fi
         if [ -n "$INPUT_LINK_BASE" ]; then args+=(-link-base "$INPUT_LINK_BASE"); fi
         if [ -n "$INPUT_GITHUB_REPO" ]; then args+=(-github-repo "$INPUT_GITHUB_REPO"); fi
         if [ "$INPUT_CREATE_ISSUES" = "true" ]; then args+=(-create-issues); fi

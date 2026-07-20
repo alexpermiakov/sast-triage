@@ -35,6 +35,8 @@ type Config struct {
 	CachePath        string
 	RepoRoot         string
 	ReportPath       string
+	DigestPath       string // byte-bounded report for size-capped surfaces; empty → skip
+	DigestBytes      int    // digest size cap; 0 → report.DefaultDigestBytes
 	TriagedSARIFPath string // verdict-annotated copy of the input SARIF; empty → skip
 
 	Model          string
@@ -181,9 +183,16 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	if err := c.Save(cfg.CachePath); err != nil {
 		return summary, err
 	}
-	md := report.Render(items, report.Options{LinkBase: cfg.LinkBase})
+	opts := report.Options{LinkBase: cfg.LinkBase}
+	md := report.Render(items, opts)
 	if err := os.WriteFile(cfg.ReportPath, []byte(md), 0o644); err != nil {
 		return summary, fmt.Errorf("write report: %w", err)
+	}
+	if cfg.DigestPath != "" {
+		digest := report.RenderDigest(items, opts, cfg.DigestBytes)
+		if err := os.WriteFile(cfg.DigestPath, []byte(digest), 0o644); err != nil {
+			return summary, fmt.Errorf("write digest: %w", err)
+		}
 	}
 	if cfg.TriagedSARIFPath != "" {
 		if err := writeTriagedSARIF(cfg, items); err != nil {

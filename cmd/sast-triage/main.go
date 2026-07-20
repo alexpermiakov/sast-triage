@@ -18,6 +18,7 @@ import (
 	"github.com/alexpermiakov/sast-triage/internal/agent"
 	"github.com/alexpermiakov/sast-triage/internal/github"
 	"github.com/alexpermiakov/sast-triage/internal/pipeline"
+	"github.com/alexpermiakov/sast-triage/internal/report"
 )
 
 func main() {
@@ -25,7 +26,9 @@ func main() {
 		sarifPath        = flag.String("sarif", "findings.sarif", "SARIF 2.1.0 input (opengrep/semgrep --sarif --dataflow-traces)")
 		cachePath        = flag.String("cache", "triage-cache.json", "triage cache file (committed to git)")
 		repoRoot         = flag.String("repo", ".", "repository root the findings refer to")
-		reportPath       = flag.String("report", "triage-report.md", "markdown report output")
+		reportPath       = flag.String("report", "triage-report.md", "markdown report output (complete; no size cap)")
+		digestPath       = flag.String("digest", "triage-digest.md", "byte-bounded digest of the report, for surfaces that cap size — the Actions step summary (1 MiB) and PR/issue bodies (65,536 chars). On by default: a report too large to publish is the common failure, not the rare one. Empty = skip")
+		digestBytes      = flag.Int("digest-bytes", report.DefaultDigestBytes, "size cap for -digest; findings past it are dropped by priority (benign first, exploitable last) and counted in the footer")
 		triagedSARIF     = flag.String("triaged-sarif", "", "write a verdict-annotated copy of the input SARIF here (benign findings carry suppressions) for Code Scanning upload; empty = skip")
 		provider         = flag.String("provider", "", "LLM API shape: anthropic for Claude's native API, openai for anything OpenAI-compatible. Empty (default) infers openai from -base-url")
 		baseURL          = flag.String("base-url", "", "API base URL, e.g. http://localhost:11434/v1 for local Ollama. Selects the OpenAI-compatible path on its own; with -provider anthropic it overrides Claude's endpoint. No default: the tool only ever talks to the endpoint you name")
@@ -65,6 +68,8 @@ func main() {
 		CachePath:        *cachePath,
 		RepoRoot:         *repoRoot,
 		ReportPath:       *reportPath,
+		DigestPath:       *digestPath,
+		DigestBytes:      *digestBytes,
 		TriagedSARIFPath: *triagedSARIF,
 		Model:            *model,
 		MaxIterations:    *maxIter,
