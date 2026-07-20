@@ -1,0 +1,60 @@
+name: Release
+
+# Cross-compiles the binaries that action.yml downloads. Fires on version tags;
+# the tagged commit must already carry the matching SAST_TRIAGE_VERSION in
+# action.yml (see the comment there) or consumers of that tag will fetch assets
+# from a different release than the action code they pinned.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release, upload assets
+      id-token: write # sign the build provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+
+      # One runner cross-compiles every target: pure-Go, CGO off, so there is no
+      # toolchain to install per platform. -trimpath keeps the build reproducible
+      # (no runner-local paths baked into the binary), which is what makes the
+      # attestation below worth checking.
+      - name: Build
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            os="${target%/*}" arch="${target#*/}"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -trimpath -ldflags="-s -w" \
+              -o "dist/sast-triage_${os}_${arch}" ./cmd/sast-triage
+          done
+          (cd dist && sha256sum sast-triage_* > checksums.txt)
+          cat dist/checksums.txt
+
+      # Binds each binary to this repo, workflow and commit. action.yml verifies
+      # it at download, so a release asset swapped after the fact fails the run
+      # rather than silently executing.
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: dist/sast-triage_*
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --generate-notes
+          fi
