@@ -58,7 +58,7 @@ jobs:
         uses: ./
         with:
           provider: openai
-          model: DeepSeek-V4-Pro
+          model: deepseek-v4-flash
           base-url: https://api.deepseek.com/v1
           openai-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           scope: diff
@@ -89,3 +89,4 @@ jobs:
             triage-digest.md
             .sast-triage/cache.json
           retention-days: 7
+
