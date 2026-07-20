@@ -1,4 +1,48 @@
 {
   "version": 1,
-  "entries": {}
+  "entries": {
+    "synthetic:0fbbae0429f6dd5bd67ce72d371093a45f540f2bccce1cbb1d0d44f471fa4ac9": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "exploitable",
+      "reason": "The flagged dependabot.yml entry for github-actions (lines 14-20) does not set a cooldown period, and no cooldown configuration exists anywhere in the repository. Without a cooldown, Dependabot will immediately propose updates to newly published package versions, creating a supply-chain risk where a freshly published malicious version could be offered to maintainers before the community has time to detect it.",
+      "evidence": [
+        ".github/dependabot.yml:4-10",
+        ".github/dependabot.yml:14-20"
+      ],
+      "codeHash": "sha256:dfc543be86fb04f7016ebb9237bb2f821bb230873a65d0b7fdbedc8f454b850d",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-20T21:54:27Z",
+      "tokensUsed": 14084
+    },
+    "synthetic:4d37171025e51f08cf8758203b01fc40473041647fe3ed6e9e8767c9b90b40f1": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "benign",
+      "reason": "math/rand/v2 is used only for jitter in retry backoff timing (line 215). The result is passed to time.Sleep and never used for cryptographic purposes such as keys, tokens, or secrets. CWE-338 applies to using weak PRNGs for cryptographic operations, which is not the case here.",
+      "evidence": [
+        "internal/agent/openai.go:9",
+        "internal/agent/openai.go:209-216",
+        "internal/agent/openai.go:140-173"
+      ],
+      "codeHash": "sha256:3c98ab9db706fd84110f7a886ebbd5e140550a0e5d1d96a44eaa06fa0f6cd1f2",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-20T21:54:18Z",
+      "tokensUsed": 22535
+    },
+    "synthetic:a46b9fb36f28a5d90c3d72434c68c61d0d6f5bad48fc80961b2cee05656d809d": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "benign",
+      "reason": "The flagged region is a static YAML configuration file with no attacker-controlled input path. The absence of a cooldown block is a supply-chain hardening recommendation, not an exploitable code vulnerability where untrusted input reaches a sink. No code reads external input and writes into this file.",
+      "evidence": [
+        ".github/dependabot.yml:4-10",
+        ".github/dependabot.yml:1-20"
+      ],
+      "codeHash": "sha256:8f45dc1954d2fdd057a5bc0ec472a538b3f4622291e653c8936ab31a3525446e",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-20T21:54:27Z",
+      "tokensUsed": 10101
+    }
+  }
 }
