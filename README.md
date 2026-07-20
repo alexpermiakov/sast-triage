@@ -39,12 +39,10 @@ graph LR
 
 ## Quick Start
 
-Three complete paths — each one is a working setup end to end, scanner included. Pick one, add the key, done.
-
 <details open>
-<summary><b>Hosted API</b> (Claude, DeepSeek, Kimi, OpenAI, …) — what this repo's own CI uses</summary>
+<summary><b>Hosted API</b> (Claude, DeepSeek, Kimi, OpenAI, …)</summary>
 
-Add an `LLM_API_KEY` repo secret — a key from any provider below — then save this as `.github/workflows/triage.yml`, or copy the `triage` job into a workflow you already have:
+Add your Claude key as an `ANTHROPIC_API_KEY` repo secret, then save this as `.github/workflows/triage.yml`:
 
 ```yaml
 name: Triage
@@ -57,7 +55,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Your SAST tool goes here — semgrep, opengrep, CodeQL, gosec, … anything emitting SARIF
       - name: Scan → findings.sarif
         run: |
           pipx install semgrep
@@ -66,15 +63,20 @@ jobs:
       - name: Triage
         uses: alexpermiakov/sast-triage@v1
         with:
-          api-key: ${{ secrets.LLM_API_KEY }}
-
-          # Claude — what this repo's CI runs:
           provider: anthropic
           model: claude-sonnet-5
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
 
-          # …or any OpenAI-compatible API - swap the two lines above for these:
-          # base-url: https://api.deepseek.com/v1
-          # model: DeepSeek-V4-Pro
+Swap the scan step for whatever you already run — opengrep, CodeQL, gosec, Bandit — as long as it writes SARIF 2.1.0 to `findings.sarif`.
+
+On a different provider? Drop `provider` and name the endpoint instead:
+
+```yaml
+        with:
+          base-url: https://api.deepseek.com/v1
+          model: deepseek-chat
+          api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
 
 </details>
@@ -91,7 +93,7 @@ permissions:
   contents: read
 jobs:
   triage:
-    runs-on: ubuntu-latest # CPU-only demo; for real verdicts: [self-hosted, gpu] + a bigger model
+    runs-on: ubuntu-latest
     services:
       ollama:
         image: ollama/ollama:latest
@@ -100,20 +102,19 @@ jobs:
       - uses: actions/checkout@v7
       - run: curl -fsS http://localhost:11434/api/pull -d '{"name":"qwen2.5-coder:1.5b-instruct"}'
 
-      # Your SAST tool goes here — semgrep, opengrep, CodeQL, gosec, … anything emitting SARIF
       - name: Scan → findings.sarif
         run: |
           pipx install semgrep
           semgrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
 
-      - name: Triage — fail only on NEW exploitable findings
+      - name: Triage
         uses: alexpermiakov/sast-triage@v1
         with:
           base-url: http://localhost:11434/v1
           model: qwen2.5-coder:1.5b-instruct
 ```
 
-`base-url` + `model` point at any OpenAI-compatible server — swap in vLLM or LM Studio by changing the URL. That 1.5b model proves the plumbing, not the judgment — for real local verdicts run the biggest code model your hardware fits, and expect more `uncertain` than a frontier model leaves behind.
+`base-url` + `model` point at any OpenAI-compatible server — swap in vLLM or LM Studio by changing the URL. That 1.5b model on `ubuntu-latest` proves the plumbing, not the judgment — for real local verdicts use `runs-on: [self-hosted, gpu]` and the biggest code model your hardware fits, and expect more `uncertain` than a frontier model leaves behind.
 
 </details>
 
