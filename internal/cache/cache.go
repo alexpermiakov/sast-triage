@@ -15,6 +15,11 @@ import (
 
 const Version = 1
 
+// VerdictUncertain is the one verdict class a model change invalidates. It is
+// spelled out here rather than imported from internal/agent because agent
+// imports cache; the rule has to live next to Lookup that enforces it.
+const VerdictUncertain = "uncertain"
+
 // Cache is the on-disk triage cache. Entries are keyed by matchBasedId
 // fingerprint; all verdict classes are stored (exploitable verdicts are memory
 // too — otherwise they would be re-triaged nightly forever).
@@ -24,7 +29,8 @@ type Cache struct {
 }
 
 // Entry is one cached verdict. A verdict is a fact about the code it read, so
-// CodeHash covers the flagged region plus every evidence region.
+// CodeHash covers the flagged region plus every evidence region. Model is
+// load-bearing for uncertain entries only — see Lookup.
 type Entry struct {
 	RuleID     string   `json:"ruleId"`
 	File       string   `json:"file"`
@@ -107,12 +113,26 @@ func (c *Cache) Save(path string) error {
 	return nil
 }
 
-// Lookup returns the entry for fingerprint if it exists AND its codeHash still
-// matches the current code. Any failure to recompute (moved file, drifted
-// lines, malformed refs) is a miss: the verdict no longer describes the code.
-func (c *Cache) Lookup(fingerprint, repoRoot string, flagged Region) (Entry, bool) {
+// Lookup returns the entry for fingerprint if it exists, its codeHash still
+// matches the current code, AND a model change has not retired it. Any failure
+// to recompute the hash (moved file, drifted lines, malformed refs) is a miss:
+// the verdict no longer describes the code.
+//
+// Deciding under a different model retires uncertain entries only. uncertain is
+// a non-answer, so re-deciding it costs one triage and can only improve on
+// nothing. benign and exploitable survive the swap: their invalidation contract
+// is cited evidence plus codeHash, which is a claim about the code and says
+// nothing about who read it. Re-running them would re-confirm at full price in
+// the good case and let a weaker model overturn a stronger one's work in the
+// bad case — and the swap direction is not knowable here. See docs/DESIGN.md.
+func (c *Cache) Lookup(fingerprint, repoRoot string, flagged Region, model string) (Entry, bool) {
 	e, ok := c.Entries[fingerprint]
 	if !ok {
+		return Entry{}, false
+	}
+	// Checked before hashing: a retired entry is a miss whatever the code says,
+	// and this skips reading every evidence region to prove it.
+	if e.Verdict == VerdictUncertain && e.Model != model {
 		return Entry{}, false
 	}
 	h, err := CodeHash(repoRoot, flagged, e.Evidence)

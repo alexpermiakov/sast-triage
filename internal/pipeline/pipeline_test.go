@@ -320,6 +320,71 @@ func TestRunTransportErrorNotCached(t *testing.T) {
 	}
 }
 
+// Switching models re-triages uncertain entries and nothing else: a
+// non-answer is worth re-deciding under a new model, a decided verdict is a
+// claim about the code that survives the swap.
+func TestRunModelChangeRetriagesOnlyUncertain(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := baseConfig(t, dir)
+	cfg.Model = "model-a"
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "uncertain", "reason": "could not follow the query into the driver"}`),
+		textResp(`{"verdict": "benign", "reason": "sample credential in demo code, not a live secret", "evidence": ["app/config.go:7"]}`),
+	}}
+	s, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Uncertain != 1 || s.Benign != 2 {
+		t.Fatalf("first run summary = %+v, want 1 uncertain + 2 benign", s)
+	}
+
+	// Same findings, different model. Only the uncertain one may reach the LLM;
+	// a second scripted response is deliberately absent, so any extra call
+	// exhausts the script and surfaces as an uncertain verdict.
+	cfg2 := baseConfig(t, dir)
+	cfg2.Model = "model-b"
+	client2 := &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "exploitable", "reason": "id flows unsanitized to QueryRow", "evidence": ["app/handlers.go:16", "app/handlers.go:17-18"]}`),
+	}}
+	cfg2.Client = client2
+	s2, err := Run(context.Background(), cfg2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client2.calls != 1 {
+		t.Errorf("LLM calls on model change = %d, want 1 (only the uncertain finding re-triages)", client2.calls)
+	}
+	if s2.Cached != 2 || s2.Fresh != 1 {
+		t.Errorf("model change accounting = %+v, want 2 cached + 1 fresh", s2)
+	}
+	if s2.Exploitable != 1 || s2.Benign != 2 {
+		t.Errorf("model change summary = %+v", s2)
+	}
+
+	c, err := cache.Load(cfg2.CachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqli := c.Entries["0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9_0"]
+	if sqli.Verdict != "exploitable" || sqli.Model != "model-b" {
+		t.Errorf("re-triaged entry = %+v, want exploitable decided by model-b", sqli)
+	}
+
+	// Third run, model unchanged: a stable model re-runs nothing, so a nil
+	// client is enough.
+	cfg3 := baseConfig(t, dir)
+	cfg3.Model = "model-b"
+	s3, err := Run(context.Background(), cfg3)
+	if err != nil {
+		t.Fatalf("stable model must need no client: %v", err)
+	}
+	if s3.Cached != 3 || s3.Fresh != 0 {
+		t.Errorf("stable model accounting = %+v, want everything cached", s3)
+	}
+}
+
 func TestRunNeedsClientOnlyWhenWorkRemains(t *testing.T) {
 	dir := t.TempDir()
 	cfg := baseConfig(t, dir)
