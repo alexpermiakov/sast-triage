@@ -26,24 +26,14 @@ graph LR
     O --> P["cache diff in the PR —<br/>you approve each suppression"]
 ```
 
-The agent only reads code and writes verdicts to two files; your workflow decides where they land. A run that finds nothing new is a green check and a report nobody has to open.
-
 ## Quick Start
 
-Two inputs decide everything, and neither is ever inferred: **`scope`** is what gets triaged (`diff` or `full`), **`mode`** is whether the result can fail your build (`enforce`, `report`, `baseline`). Pick them from the trigger:
-
-| Trigger             | `scope` | `mode`     | Why                                                  |
-| ------------------- | ------- | ---------- | ---------------------------------------------------- |
-| `pull_request`      | `diff`  | `enforce`  | Only what this PR touched, and it can fail the check |
-| `schedule` / `push` | `full`  | `report`   | Whole repo, advisory — catches what diff scope can't |
-| `workflow_dispatch` | `full`  | `baseline` | The one-off seeding run that creates your cache      |
-
-Start with seeding — it is a deliberate one-off, and the PR it opens is the most valuable thing this tool produces.
+Two inputs decide everything, and neither is ever inferred: **`scope`** is what gets triaged (`diff` or `full`), **`mode`** is whether the result can fail your build (`enforce`, `report`, `baseline`). Each step below sets both.
 
 <details open>
 <summary><b>Step 1: seed the cache</b> — one <code>workflow_dispatch</code> run, one review PR, merged once</summary>
 
-Add your Claude key as an `ANTHROPIC_API_KEY` repo secret, then save this as `.github/workflows/triage-seed.yml` and run it from the Actions tab:
+Save this as `.github/workflows/triage-seed.yml` and run it from the Actions tab:
 
 ```yaml
 name: Triage (seed)
@@ -70,11 +60,9 @@ jobs:
           model: claude-sonnet-5
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           scope: full
-          mode: baseline # triage everything, gate nothing
+          mode: baseline # triage everything, never fail the build
           cache-write: pr # one PR titled "seed sast-triage cache"
 ```
-
-You get one PR carrying `.sast-triage/cache.json`: every finding in your backlog with a verdict, the reasoning, and the `file:line` evidence behind it. **Review it as the security artifact it is** — read the exploitables closely, spot-check the proposed suppressions, edit or delete any entry you disagree with — then merge. That review is the moment the backlog becomes a decision instead of a number.
 
 </details>
 
@@ -121,9 +109,9 @@ After seeding, this is nearly invisible: a typical feature PR triages a handful 
 </details>
 
 <details>
-<summary><b>Step 3: run on a schedule</b> — full repo, advisory, catches what diff scope can't</summary>
+<summary><b>Step 3 (optional): run on a schedule</b> — full repo, advisory, catches what diff scope can't</summary>
 
-Add a third workflow on a schedule:
+Save as `.github/workflows/triage-scheduled.yml`:
 
 ```yaml
 name: Triage (scheduled)
@@ -152,7 +140,7 @@ jobs:
           cache-write: none # artifact only, no commit
 ```
 
-**This run is not optional.** Diff scope has a structural hole: a change in `Foo.java` can make a _pre-existing_ finding in `Bar.java` exploitable, and nothing keyed on changed files will ever see it. (Semgrep's baseline mode has the same hole.) The scheduled full-repo run is what closes it — that is the trade being made, stated plainly rather than papered over.
+What this buys you: diff scope has a structural hole — a change in `Foo.java` can make a _pre-existing_ finding in `Bar.java` exploitable, and nothing keyed on changed files will ever see it. (Semgrep's baseline mode has the same hole.) A periodic full-repo run is what closes it. Mostly cache hits after seeding, so it is cheap to leave on.
 
 </details>
 
@@ -245,32 +233,13 @@ sast-triage -provider anthropic -model claude-sonnet-5 \
 
 ## What you get
 
-Every run writes **`triage-report.md`** — every verdict with its reasoning and clickable `file:line` evidence, proposed suppressions first so vetoing one is a 30-second action. That one file is where you read the results; keep it with `actions/upload-artifact`, since it is complete and uncapped.
-
-It also writes **`triage-digest.md`**, the same verdicts bounded to 50,000 bytes — that is what the Quick Start pipes to the run summary, because GitHub drops a step summary over 1 MiB and rejects a PR body over 65,536 characters, and a 2,000-finding backlog clears both. The digest leads with exploitable rather than benign, and when findings do not fit it drops the least urgent first and says so in the footer: `_Digest truncated to fit: 320 benign omitted._` Set `digest: ""` to skip it, `digest-bytes:` to move the cap. Around these:
-
-- ✅ **Inline PR comments** (`pr-comments: true`) — the verdict, the reasoning, and the cited evidence land on the diff line, where the review already is. This is the product's UX; the markdown file is the archive
-- ✅ **A gate that only fires on `exploitable`** — never on `uncertain`, never on the backlog. A gate that fires on noise is a gate that gets disabled in a week, so this one doesn't
+- ✅ **A gate that only fires on `exploitable`** (`mode: enforce`, exit 3) — never on `uncertain`, never on the backlog. A gate that fires on noise is a gate that gets disabled in a week, so this one doesn't
+- ✅ **Filtered SARIF on every run** (`triaged.sarif`, on by default) — benign findings are relabelled via `suppressions[]`, never deleted. Upload it to the Security tab with `github/codeql-action/upload-sarif`, or hand it to DefectDojo
+- ✅ **Inline PR comments** (`pr-comments: true`) — the verdict, the reasoning, and the cited evidence land on the diff line, where the review already is
+- ✅ **`triage-report.md`** — every verdict with its reasoning and clickable `file:line` evidence, proposed suppressions first so vetoing one is a 30-second action. Complete and uncapped; keep it with `actions/upload-artifact`
 - ✅ **Human-approved verdicts** — the run updates `.sast-triage/cache.json`; it reaches `main` through a normal PR merge, so every suppression is a readable diff nobody can skip
-- ✅ **Filtered SARIF on every run** (`triaged.sarif`, on by default) — benign findings are relabelled via `suppressions[]`, never deleted. Upload it to the Security tab, or hand it to DefectDojo
 - ✅ **GitHub issues for confirmed vulnerabilities** (opt-in `create-issues:`) — one per finding, deduped across runs, with the evidence in the body
 - ✅ **Any SARIF 2.1.0 scanner** — Semgrep, CodeQL, Snyk Code, gosec, Bandit, …
-
-Uploading `triaged.sarif` to the Security tab needs a `github/codeql-action/upload-sarif` step (and GitHub Advanced Security on a private repo). GitHub ignores the SARIF `suppressions` property on upload, so pair it with `advanced-security/dismiss-alerts` if you want benign findings to arrive dismissed.
-
-### Where the cache lives, and how it gets there
-
-`.sast-triage/cache.json`, committed to git. The directory is deliberate: it leaves room for config alongside it, it gives you one clean `CODEOWNERS` line so a security owner reviews every suppression change, and it is one clean `paths-ignore:` entry so cache commits don't retrigger CI.
-
-```
-/.sast-triage/  @your-org/security
-```
-
-**The cache is never bot-PR'd onto your protected branch.** On a PR run (`cache-write: branch`) the delta is committed to the PR's own head branch, so it arrives on `main` through the merge you were already reviewing. `cache-write: pr` exists for seeding, where there is no branch of your own to commit to. Fork PRs cannot push at all — the token is read-only — so the cache stays in the artifact and the run says so; triage and the gate are unaffected.
-
-### The cache costs money, never safety
-
-A missing, wiped, or hand-mangled cache entry causes **re-triage** — it can never produce a `benign`. `benign` with no cited evidence, a hash that doesn't match, an unparseable evidence ref, a verdict string nobody models: every one of them is a miss, and a miss means the finding gets triaged again from scratch. Deleting the cache file costs you one full run's tokens and nothing else. That invariant is pinned by [`TestDamagedEntryNeverSuppresses`](internal/cache/safety_test.go).
 
 ## Reference
 
@@ -413,6 +382,13 @@ Verdicts live in git (`.sast-triage/cache.json`), keyed to the evidence they cit
 <summary><strong>What about prompt injection — a comment claiming "this is safe"?</strong></summary>
 
 Repo content enters the prompt as evidence, never as instructions. A `benign` verdict requires cited `file:line` evidence that the tool re-verifies — prose claims don't meet the bar. The worst case for a fooled model is a wrong verdict, and the dangerous direction (false `benign`) demands the most proof, is human-approved in a PR, and auto-expires when any cited line changes.
+
+</details>
+
+<details>
+<summary><strong>What happens if I delete the cache file?</strong></summary>
+
+You pay for one full run again, and nothing else. A missing, wiped, or hand-mangled entry causes **re-triage** — it can never produce a `benign`. `benign` with no cited evidence, a hash that doesn't match, an unparseable evidence ref, a verdict string nobody models: every one of them is a miss, and a miss means the finding gets triaged again from scratch. That invariant is pinned by [`TestDamagedEntryNeverSuppresses`](internal/cache/safety_test.go).
 
 </details>
 
