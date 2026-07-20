@@ -1,9 +1,9 @@
-# Composite action wrapping the sast-triage binary. It builds the binary from
-# this action's own pinned source (github.action_path), so the ref you pin —
-# tag, SHA, or `uses: ./` for this repo's dogfood workflow — is exactly the
-# code that runs. Inputs mirror the CLI flags one-to-one (flag `-base-url` →
-# input `base-url`); logic stays in the Go binary, this file only maps inputs
-# to flags.
+# Composite action wrapping the sast-triage binary. Remote use downloads the
+# prebuilt binary for the pinned release, verified by sha256 + build provenance;
+# a local checkout (`uses: ./`, the dogfood workflow) compiles the working tree
+# instead. Either way the ref you pin determines the code that runs. Inputs
+# mirror the CLI flags one-to-one (flag `-base-url` → input `base-url`); logic
+# stays in the Go binary, this file only maps inputs to flags.
 name: SAST Triage
 description: >-
   Triage SAST findings (SARIF 2.1.0) with a bounded LLM agent and an evidence-keyed verdict cache.
@@ -74,16 +74,65 @@ inputs:
 runs:
   using: composite
   steps:
+    # Local checkout (`uses: ./`, this repo's dogfood workflow): the action path
+    # sits inside the workspace, so compile the working tree — a dogfood run must
+    # exercise the code under review, never the last release.
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      if: startsWith(github.action_path, github.workspace)
       with:
         go-version: stable
         # go.sum lives in the action path, outside the workspace on remote use,
         # where setup-go's cache glob cannot see it.
         cache: false
 
-    - name: Build sast-triage from the pinned action source
+    - name: Build sast-triage from the local checkout
+      if: startsWith(github.action_path, github.workspace)
       shell: bash
       run: go build -C "$GITHUB_ACTION_PATH" -o "$RUNNER_TEMP/sast-triage" ./cmd/sast-triage
+
+    # Remote use (`uses: alexpermiakov/sast-triage@<ref>`): download the prebuilt
+    # binary instead of installing Go and compiling (~20s -> ~2s).
+    #
+    # SAST_TRIAGE_VERSION must be bumped in the same commit that gets tagged, so
+    # the pinned ref and the binary it fetches are the same release. Two checks
+    # stand in for compiling the source yourself: the sha256 from the release's
+    # checksums.txt, and the build provenance attestation, which proves this repo's
+    # release workflow produced the binary from this tag. Both are fatal on
+    # mismatch — a security tool does not run an unverified binary.
+    - name: Download the pinned sast-triage release binary
+      if: ${{ !startsWith(github.action_path, github.workspace) }}
+      shell: bash
+      env:
+        SAST_TRIAGE_VERSION: v1.2.0
+        SAST_TRIAGE_REPO: alexpermiakov/sast-triage
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        case "$(uname -s)" in
+          Linux) os=linux ;;
+          Darwin) os=darwin ;;
+          *) echo "::error::sast-triage publishes linux and macOS binaries only; $(uname -s) is unsupported"; exit 1 ;;
+        esac
+        case "$(uname -m)" in
+          x86_64 | amd64) arch=amd64 ;;
+          arm64 | aarch64) arch=arm64 ;;
+          *) echo "::error::unsupported architecture $(uname -m)"; exit 1 ;;
+        esac
+
+        asset="sast-triage_${os}_${arch}"
+        base="https://github.com/${SAST_TRIAGE_REPO}/releases/download/${SAST_TRIAGE_VERSION}"
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" "$base/$asset"
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/checksums.txt" "$base/checksums.txt"
+
+        # macOS runners ship shasum, not sha256sum.
+        cd "$RUNNER_TEMP"
+        if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
+        grep " ${asset}\$" checksums.txt | $sum -c -
+
+        gh attestation verify "$RUNNER_TEMP/$asset" --repo "$SAST_TRIAGE_REPO"
+
+        mv "$RUNNER_TEMP/$asset" "$RUNNER_TEMP/sast-triage"
+        chmod +x "$RUNNER_TEMP/sast-triage"
 
     # Inputs reach the shell only via env (never interpolated into the script),
     # so a hostile model/base-url string cannot inject commands.

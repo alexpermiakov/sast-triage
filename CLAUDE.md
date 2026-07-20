@@ -29,14 +29,20 @@ internal/
   github/            minimal Issues REST client (dedupe owned by cache issueRef)
   pipeline/          run orchestration: partition, budget, errgroup fan-out,
                      single-writer merge, issue routing
-action.yml           composite GitHub Action wrapping the binary; builds from the
-                     pinned action source (github.action_path), inputs mirror CLI
-                     flags 1:1, dogfooded by triage.yml via `uses: ./`
+action.yml           composite GitHub Action wrapping the binary; downloads the
+                     prebuilt binary for the release named by SAST_TRIAGE_VERSION
+                     (sha256 + provenance verified), or compiles the working tree
+                     when run from a local checkout (github.action_path inside
+                     github.workspace). Bump SAST_TRIAGE_VERSION in the commit you
+                     tag. Inputs mirror CLI flags 1:1, dogfooded by triage.yml via
+                     `uses: ./`
 .github/workflows/   ci.yml (lint+test on push/PR), triage.yml (dogfood: scans this
                      repo on push/PR to main; PR jobs are read-only and gate on new
                      exploitables, main jobs file issues (via the opt-in
                      -create-issues flag) + refresh the triage/main cache
-                     review PR)
+                     review PR), release.yml (on v*.*.* tags: cross-compiles
+                     linux/darwin × amd64/arm64, attests provenance, uploads the
+                     assets action.yml downloads)
 testdata/            real scanner SARIF fixtures, opengrep/semgrep format (pinned
                      to unit-test line numbers)
                      + sampleapp/, the intentionally vulnerable smoke-test target
