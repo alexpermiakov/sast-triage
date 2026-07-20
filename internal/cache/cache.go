@@ -51,6 +51,26 @@ type Entry struct {
 	IssueRef   int      `json:"issueRef,omitempty"`
 }
 
+// Key identifies the finding a lookup is for. The fingerprint is the map key,
+// but it is not on its own proof that an entry belongs to the finding asking
+// for it: it originates with the scanner, and a scanner emitting a placeholder
+// or reusing an id across results hands several distinct findings the same
+// key. internal/sarif guarantees uniqueness at ingest; this is that guarantee
+// re-checked where the entry is actually trusted, alongside the evidence bar
+// and the codeHash, because the same reasoning applies — the file is
+// hand-editable in git, and a merge or an edit can pair a fingerprint with an
+// entry that was never about this finding.
+//
+// The failure it forecloses is silent and one-directional: an entry reached
+// under the wrong identity is a verdict about other code, and a benign one
+// suppresses a finding nobody triaged. RuleID and File are already recorded on
+// every entry, so the check costs a comparison and no new state.
+type Key struct {
+	Fingerprint string
+	RuleID      string
+	File        string
+}
+
 // Region is a contiguous line range in a repo-relative file.
 type Region struct {
 	File  string
@@ -126,10 +146,11 @@ func (c *Cache) Save(path string) error {
 	return nil
 }
 
-// Lookup returns the entry for fingerprint if it exists, meets the evidence
-// bar, its codeHash still matches the current code, AND a model change has not
-// retired it. Any failure to recompute the hash (moved file, drifted lines,
-// malformed refs) is a miss: the verdict no longer describes the code.
+// Lookup returns the entry for k if it exists, is an entry about k's finding,
+// meets the evidence bar, its codeHash still matches the current code, AND a
+// model change has not retired it. Any failure to recompute the hash (moved
+// file, drifted lines, malformed refs) is a miss: the verdict no longer
+// describes the code.
 //
 // The invariant every miss upholds: a missing, damaged, or unverifiable entry
 // causes RE-TRIAGE, never a benign verdict. A wiped or hand-mangled cache costs
@@ -143,9 +164,15 @@ func (c *Cache) Save(path string) error {
 // nothing about who read it. Re-running them would re-confirm at full price in
 // the good case and let a weaker model overturn a stronger one's work in the
 // bad case — and the swap direction is not knowable here. See docs/DESIGN.md.
-func (c *Cache) Lookup(fingerprint, repoRoot string, flagged Region, model string) (Entry, bool) {
-	e, ok := c.Entries[fingerprint]
+func (c *Cache) Lookup(k Key, repoRoot string, flagged Region, model string) (Entry, bool) {
+	e, ok := c.Entries[k.Fingerprint]
 	if !ok {
+		return Entry{}, false
+	}
+	// Identity, before anything is believed about the entry: a verdict filed
+	// for another rule or another file is not this finding's answer, however
+	// well it verifies. See Key.
+	if e.RuleID != k.RuleID || e.File != k.File {
 		return Entry{}, false
 	}
 	// Checked before hashing: a retired entry is a miss whatever the code says,

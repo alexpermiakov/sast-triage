@@ -78,6 +78,155 @@ func baseConfig(t *testing.T, dir string) Config {
 	}
 }
 
+// degenerateSARIF writes a log in which every result carries the same
+// scanner fingerprint, which is what semgrep emits for matchBasedId/v1 when it
+// runs without a platform login. Locations are real sampleapp code so verdicts
+// hash against something.
+func degenerateSARIF(t *testing.T, dir string) string {
+	t.Helper()
+	type loc struct {
+		rule, file string
+		line       int
+	}
+	locs := []loc{
+		{"go.sqli", "app/handlers.go", 17},
+		{"go.tainted-sql", "app/handlers.go", 17}, // second rule, same line
+		{"go.secret", "app/config.go", 7},
+		{"go.path", "app/db.go", 3},
+	}
+	var results []string
+	for _, l := range locs {
+		results = append(results, fmt.Sprintf(`{"ruleId":%q,"message":{"text":"m"},
+			"fingerprints":{"matchBasedId/v1":"requires login"},
+			"locations":[{"physicalLocation":{"artifactLocation":{"uri":%q},
+				"region":{"startLine":%d,"snippet":{"text":"x"}}}}]}`, l.rule, l.file, l.line))
+	}
+	body := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"semgrep"}},"results":[` +
+		strings.Join(results, ",") + `]}]}`
+
+	p := filepath.Join(dir, "degenerate.sarif")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestReportAndCacheCoverTheSameFindings: the report and the cache are two
+// renderings of one run, so a finding decided in one has to appear in the
+// other. They are built from separate structures — the report from a slice,
+// the cache from a map keyed by fingerprint — and a map silently absorbs a
+// duplicate key where a slice does not. That is how a scanner emitting one
+// fingerprint for every result produced a report of three findings beside a
+// cache holding one, with two verdicts overwritten and the survivor reachable
+// under the identity of findings it was never about.
+//
+// The equality asserted here is per-run and one-directional by design: the
+// cache accumulates across runs, and a verdict the run declined to commit
+// (deferred, transport failure, unhashable evidence) is deliberately reported
+// and deliberately not cached. What may never happen is a decided verdict
+// going missing, or two findings landing on one entry.
+func TestReportAndCacheCoverTheSameFindings(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseConfig(t, dir)
+	cfg.SARIFPath = degenerateSARIF(t, dir)
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "benign", "reason": "r1", "evidence": ["app/handlers.go:16"]}`),
+		textResp(`{"verdict": "exploitable", "reason": "r2", "evidence": ["app/handlers.go:17"]}`),
+		textResp(`{"verdict": "benign", "reason": "r3", "evidence": ["app/config.go:7"]}`),
+		textResp(`{"verdict": "uncertain", "reason": "r4", "evidence": ["app/db.go:3"]}`),
+	}}
+	cfg.TriagedSARIFPath = filepath.Join(dir, "triaged.sarif")
+
+	s, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Total != 4 {
+		t.Fatalf("Total = %d, want 4 findings reported", s.Total)
+	}
+
+	c, err := cache.Load(cfg.CachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Entries) != 4 {
+		t.Fatalf("cache entries = %d, want 4 — one per decided finding, none overwritten", len(c.Entries))
+	}
+
+	// Same findings, not merely the same count: every entry is reachable under
+	// the rule and file it was decided for.
+	for fp, e := range c.Entries {
+		flagged := cache.Region{File: e.File, Start: 17, End: 17}
+		switch e.File {
+		case "app/config.go":
+			flagged.Start, flagged.End = 7, 7
+		case "app/db.go":
+			flagged.Start, flagged.End = 3, 3
+		}
+		k := cache.Key{Fingerprint: fp, RuleID: e.RuleID, File: e.File}
+		if _, ok := c.Lookup(k, cfg.RepoRoot, flagged, cfg.Model); !ok && e.Verdict != "uncertain" {
+			t.Errorf("entry %s (%s %s) does not verify under its own identity", fp, e.RuleID, e.File)
+		}
+	}
+
+	// Each scripted verdict carries its own reason, so four distinct reasons is
+	// four verdicts that arrived and stayed. A merge shows up here as a
+	// duplicate — the survivor's reason sitting on someone else's finding —
+	// which a count alone would not catch.
+	reasons := map[string]string{}
+	for fp, e := range c.Entries {
+		if prev, dup := reasons[e.Reason]; dup {
+			t.Errorf("reason %q on two entries (%s and %s): a verdict was shared", e.Reason, prev, fp)
+		}
+		reasons[e.Reason] = fp
+	}
+
+	// The two rules flagging one line are the dangerous pair: identical region,
+	// so a shared fingerprint would also produce a matching codeHash, and the
+	// cache would confirm one rule's verdict for the other instead of missing.
+	sameLine := map[string]cache.Entry{}
+	for _, e := range c.Entries {
+		if e.File == "app/handlers.go" {
+			sameLine[e.RuleID] = e
+		}
+	}
+	if len(sameLine) != 2 {
+		t.Fatalf("two rules flag app/handlers.go:17, got %d entries: %v", len(sameLine), sameLine)
+	}
+	if sameLine["go.sqli"].Reason == sameLine["go.tainted-sql"].Reason {
+		t.Error("both rules at one location carry one verdict")
+	}
+}
+
+// TestSecondRunReusesEveryEntry: identity has to survive a round trip, or the
+// fix trades a correctness bug for a cache that never hits. Re-running the
+// same scan with no client at all must be free — a miss would demand one.
+func TestSecondRunReusesEveryEntry(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseConfig(t, dir)
+	cfg.SARIFPath = degenerateSARIF(t, dir)
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "benign", "reason": "r1", "evidence": ["app/handlers.go:16"]}`),
+		textResp(`{"verdict": "benign", "reason": "r2", "evidence": ["app/handlers.go:17"]}`),
+		textResp(`{"verdict": "benign", "reason": "r3", "evidence": ["app/config.go:7"]}`),
+		textResp(`{"verdict": "benign", "reason": "r4", "evidence": ["app/db.go:3"]}`),
+	}}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	second := baseConfig(t, dir)
+	second.SARIFPath = cfg.SARIFPath
+	second.Client = nil // a single miss would fail the run outright
+	s, err := Run(context.Background(), second)
+	if err != nil {
+		t.Fatalf("second run needed the LLM again: %v", err)
+	}
+	if s.Cached != 4 || s.Fresh != 0 {
+		t.Errorf("cache accounting = %+v, want all 4 served from cache", s)
+	}
+}
+
 func TestRunFullThenIncremental(t *testing.T) {
 	dir := t.TempDir()
 	cfg := baseConfig(t, dir)

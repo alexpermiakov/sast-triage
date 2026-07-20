@@ -42,10 +42,6 @@ func Annotate(in []byte, verdicts map[string]Triage) ([]byte, error) {
 	}
 
 	for i, run := range log.Runs {
-		rules := make(map[string]rule, len(run.Tool.Driver.Rules))
-		for _, ru := range run.Tool.Driver.Rules {
-			rules[ru.ID] = ru
-		}
 		rawRun, ok := rawRuns[i].(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("annotate: malformed run %d", i)
@@ -54,10 +50,15 @@ func Annotate(in []byte, verdicts map[string]Triage) ([]byte, error) {
 		if len(rawResults) != len(run.Results) {
 			return nil, fmt.Errorf("annotate: malformed results array in run %d", i)
 		}
-		for j, res := range run.Results {
-			f, err := toFinding(res, rules)
-			if err != nil {
-				continue // unparseable result: pass through untouched
+		// Same function Parse uses, so the fingerprints a verdict was filed
+		// under are the fingerprints looked up here — including the
+		// disambiguation of results the scanner failed to tell apart. An
+		// unparseable result yields an empty fingerprint and is passed through
+		// untouched; the error is Parse's to report, not annotation's.
+		findings, _ := findingsFromRun(run)
+		for j, f := range findings {
+			if f.Fingerprint == "" {
+				continue
 			}
 			t, ok := verdicts[f.Fingerprint]
 			if !ok {

@@ -151,7 +151,8 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	// arrive severity-sorted from the parser, so budget goes to the scary
 	// ones first.
 	for _, f := range findings {
-		if e, ok := c.Lookup(f.Fingerprint, cfg.RepoRoot, agent.FlaggedRegion(f), cfg.Model); ok {
+		key := cache.Key{Fingerprint: f.Fingerprint, RuleID: f.RuleID, File: f.File}
+		if e, ok := c.Lookup(key, cfg.RepoRoot, agent.FlaggedRegion(f), cfg.Model); ok {
 			items = append(items, itemFromEntry(f, e))
 			continue
 		}
@@ -305,8 +306,13 @@ func mergeVerdict(c *cache.Cache, cfg Config, f sarif.Finding, v agent.Verdict, 
 	if v.ShortCircuit {
 		e.Model = "rule:short-circuit"
 	}
-	if prev, ok := c.Entries[f.Fingerprint]; ok {
-		e.IssueRef = prev.IssueRef // re-triage must not forget the filed issue
+	// Re-triage must not forget the filed issue — but only an entry about this
+	// same finding has an issue to hand over. Identity is checked here for the
+	// reason cache.Lookup checks it: a key can be reached by a finding the
+	// entry was never about, and inheriting issueRef across that would point
+	// one finding's comment thread at another's.
+	if prev, ok := c.Entries[f.Fingerprint]; ok && prev.RuleID == f.RuleID && prev.File == f.File {
+		e.IssueRef = prev.IssueRef
 	}
 	c.Entries[f.Fingerprint] = e
 

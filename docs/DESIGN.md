@@ -58,7 +58,35 @@ cache backend.
 - Extract per result: ruleId, rule description/tags/severity, message, location
   (file, region, snippet), `fingerprints.matchBasedId/v1`, `codeFlows` taint
   trace (source→sink hops with file:line:snippet), level. A result without a
-  stable fingerprint gets a synthetic one (rule + location).
+  stable fingerprint gets a synthetic one (rule + location + snippet).
+- **Fingerprints are unique per run, guaranteed at ingest.** Identity is not a
+  local concern: it keys the cache, the verdict map that annotates the SARIF
+  for Code Scanning, issue dedupe and PR-comment dedupe. Two findings sharing
+  one is not a lost cache hit, it is one finding's verdict becoming another's —
+  and a `benign` crossing over suppresses a finding nobody triaged, in the
+  cache and in Code Scanning at once. So the guarantee is made once here and
+  every downstream map inherits it rather than restating it.
+  - The scanner's own id is preferred where it is one: it is stable under line
+    drift in a way nothing derivable from content is.
+  - A value carrying whitespace is not an id. Semgrep run without a platform
+    login emits the literal `"requires login"` for `matchBasedId/v1` on *every*
+    result, which an emptiness check alone accepts. This shipped: a run
+    reported three findings and cached one, the survivor reachable under the
+    identity of two findings it was never about.
+  - A value the run repeats is not an id either, whatever the scanner meant by
+    it. It is discarded for every result carrying it, not just the later ones,
+    so identity never depends on emission order.
+  - Both fall back to the synthetic id. That id keys on location because rule +
+    file + snippet did not separate two matches of one rule in one file, and
+    repeated flagged text (a config block, a repeated call shape) is ordinary.
+    Line drift then costs a re-triage, which is the correctly-priced failure:
+    the cache-safety invariant already prices a miss at money, and the
+    alternative prices a collision at a suppressed finding.
+  - Results identical in rule, location and text take an occurrence suffix.
+    Nothing distinguishes them; they still may not merge.
+  - Pinned by `TestFingerprintsAreUnique` in `internal/sarif/sarif_test.go`.
+    `Annotate` derives identity from the same function `Parse` does, so a
+    verdict is looked up under the fingerprint it was filed under.
 - Scanner differences (fingerprint schemes, trace formats, severity mapping)
   are deterministic ingest concerns — per-tool adapters live here, never
   per-tool prompts. The agent judges code, not scanner output.
@@ -93,17 +121,29 @@ cache backend.
 }
 ```
 
-- Hit = fingerprint present AND codeHash matches current code. codeHash covers
-  flagged region + every evidence region (a verdict is a fact about the code it
-  read, not about the finding).
+- Hit = entry is about this finding AND codeHash matches current code. codeHash
+  covers flagged region + every evidence region (a verdict is a fact about the
+  code it read, not about the finding).
 - **Cache-safety invariant: a missing, damaged, or unverifiable entry causes
   re-triage, never `benign`.** The cache is a hand-editable file in git, so
   `Lookup` re-checks the evidence bar at the trust boundary rather than assuming
   whatever wrote the file was the agent: `benign` with an empty evidence list is
   a miss, an unmodeled verdict string is a miss, an absent or mismatched
-  codeHash is a miss, an unreadable evidence region is a miss. A wiped cache
-  costs one full run's tokens and nothing else. Pinned by
+  codeHash is a miss, an unreadable evidence region is a miss, and an entry
+  whose `ruleId`/`file` disagree with the finding asking for it is a miss. A
+  wiped cache costs one full run's tokens and nothing else. Pinned by
   `TestDamagedEntryNeverSuppresses` in `internal/cache/safety_test.go`.
+- **`Lookup` takes a `cache.Key` (fingerprint + ruleId + file), not a bare
+  fingerprint.** The fingerprint is the map key but is not on its own proof that
+  an entry belongs to the finding asking for it: it originates with the scanner,
+  and ingest's uniqueness guarantee is not the cache's to assume — the file is
+  hand-editable in git, and a merge or an edit can pair a fingerprint with an
+  entry that was never about this finding. So it is re-checked where the entry
+  is actually trusted, beside the evidence bar and the codeHash. Two rules
+  flagging one line is the case that motivates it: identical region, so a shared
+  key also produces a *matching* codeHash, and the cache confirms the wrong
+  verdict rather than missing. Pinned by
+  `TestEntryForAnotherFindingNeverSuppresses`.
 - One file, mixed models. Entries record the deciding `model`, but the cache is
   not partitioned by it (no per-model files/directories): the same finding would
   then appear in N files, fragmenting the PR diff that *is* the audit trail, and
