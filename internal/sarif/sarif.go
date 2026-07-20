@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // Finding is one SARIF result flattened into the fields triage needs.
@@ -73,17 +74,11 @@ func Parse(r io.Reader) ([]Finding, error) {
 
 	var findings []Finding
 	for _, run := range log.Runs {
-		rules := make(map[string]rule, len(run.Tool.Driver.Rules))
-		for _, ru := range run.Tool.Driver.Rules {
-			rules[ru.ID] = ru
+		found, err := findingsFromRun(run)
+		if err != nil {
+			return nil, err
 		}
-		for _, res := range run.Results {
-			f, err := toFinding(res, rules)
-			if err != nil {
-				return nil, err
-			}
-			findings = append(findings, f)
-		}
+		findings = append(findings, found...)
 	}
 
 	sort.SliceStable(findings, func(i, j int) bool {
@@ -93,6 +88,92 @@ func Parse(r io.Reader) ([]Finding, error) {
 		return findings[i].Fingerprint < findings[j].Fingerprint
 	})
 	return findings, nil
+}
+
+// findingsFromRun flattens one SARIF run into findings, in result order, and
+// assigns every one of them a fingerprint unique within the run. The returned
+// slice is aligned 1:1 with run.Results; a result that could not be parsed
+// yields a zero Finding (empty Fingerprint) at its index and the first such
+// failure is returned as err, so a caller may either reject the log (Parse) or
+// skip that result and carry on (Annotate).
+//
+// Uniqueness is established here, once, because identity is load-bearing well
+// past this package: it keys the cache, the verdict map that annotates the
+// SARIF for Code Scanning, issue dedupe and PR-comment dedupe. Two findings
+// sharing a fingerprint do not merely collide in a map — one finding's verdict
+// silently becomes another's, and a benign verdict crossing over suppresses a
+// finding nobody triaged. Every downstream map inherits the guarantee made
+// here rather than restating it.
+//
+// The scanner's own id is preferred, being stable under line drift in a way
+// nothing derivable here is. It is used only when it actually identifies a
+// result, which two guards decide:
+//
+//   - Placeholders. Semgrep run without a platform login emits the literal
+//     "requires login" for matchBasedId/v1 on every result — non-empty, so an
+//     emptiness check alone lets it through as though it were an id.
+//   - Values the run repeats. Whatever a scanner means by an id it gives to
+//     several distinct results, it is not identity. It is dropped for every
+//     result carrying it rather than just the later ones, so identity never
+//     depends on which result the scanner happened to emit first.
+//
+// Both fall back to the synthetic id, which is content-derived and therefore
+// stable under reordering. Results identical in rule, location and text can
+// survive even that — nothing about them distinguishes one from the other — so
+// they, and only they, take an occurrence suffix.
+func findingsFromRun(r run) ([]Finding, error) {
+	rules := make(map[string]rule, len(r.Tool.Driver.Rules))
+	for _, ru := range r.Tool.Driver.Rules {
+		rules[ru.ID] = ru
+	}
+
+	findings := make([]Finding, len(r.Results))
+	scannerIDs := make(map[string]int, len(r.Results))
+	var firstErr error
+	for i, res := range r.Results {
+		f, err := toFinding(res, rules)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue // leaves the zero Finding at i; the caller decides
+		}
+		findings[i] = f
+		if id := scannerID(res); id != "" {
+			scannerIDs[id]++
+		}
+	}
+
+	taken := make(map[string]bool, len(findings))
+	for i := range findings {
+		if findings[i].RuleID == "" && findings[i].File == "" {
+			continue // unparseable: no identity to assign
+		}
+		id := scannerID(r.Results[i])
+		if id == "" || scannerIDs[id] > 1 {
+			id = syntheticFingerprint(findings[i])
+		}
+		unique := id
+		for n := 1; taken[unique]; n++ {
+			unique = fmt.Sprintf("%s#%d", id, n)
+		}
+		taken[unique] = true
+		findings[i].Fingerprint = unique
+	}
+	return findings, firstErr
+}
+
+// scannerID returns the scanner's own fingerprint for a result, or "" when the
+// value cannot be one. A fingerprint is an opaque token; a value carrying
+// whitespace is a sentence addressed to a human — semgrep's "requires login",
+// emitted on every result when it runs unauthenticated, is the one that
+// prompted this check, and the shape of it generalises past that one string.
+func scannerID(res result) string {
+	id := strings.TrimSpace(res.Fingerprints["matchBasedId/v1"])
+	if id == "" || strings.ContainsFunc(id, unicode.IsSpace) {
+		return ""
+	}
+	return id
 }
 
 func toFinding(res result, rules map[string]rule) (Finding, error) {
@@ -129,10 +210,8 @@ func toFinding(res result, rules map[string]rule) (Finding, error) {
 	}
 	f.Severity = severityScore(ru, f.Level)
 
-	f.Fingerprint = res.Fingerprints["matchBasedId/v1"]
-	if f.Fingerprint == "" {
-		f.Fingerprint = syntheticFingerprint(f)
-	}
+	// Fingerprint is assigned by findingsFromRun, which alone can see whether
+	// the scanner's id is unique across the run.
 
 	for _, cf := range res.CodeFlows {
 		for _, tf := range cf.ThreadFlows {
@@ -180,8 +259,25 @@ func severityScore(ru rule, level string) float64 {
 	return 0
 }
 
+// syntheticFingerprint identifies a finding by rule plus location, per
+// DESIGN.md, with the snippet folded in so a verdict is not carried across a
+// line whose content changed underneath it.
+//
+// The location is what keeps two matches of one rule in one file apart. Rule,
+// file and snippet alone did not: distinct findings hashed identically
+// whenever the flagged text repeated, which is common enough (a config block,
+// a repeated call shape) to be a routine source of shared identity rather than
+// an edge case. Line drift costing a re-triage is the cheaper failure — the
+// cache-safety invariant already prices a miss at money, and the alternative
+// prices a collision at a suppressed finding.
 func syntheticFingerprint(f Finding) string {
-	h := sha256.Sum256([]byte(f.RuleID + "\x00" + f.File + "\x00" + f.Snippet))
+	h := sha256.Sum256([]byte(strings.Join([]string{
+		f.RuleID,
+		f.File,
+		strconv.Itoa(f.StartLine),
+		strconv.Itoa(f.EndLine),
+		f.Snippet,
+	}, "\x00")))
 	return "synthetic:" + hex.EncodeToString(h[:])
 }
 

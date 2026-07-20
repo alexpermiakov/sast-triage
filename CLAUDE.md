@@ -17,7 +17,13 @@ recorded there; propose changes as questions first.
 cmd/sast-triage/     main.go — flag parsing, wiring, exit codes only
 internal/
   sarif/             parse findings.sarif; annotate verdicts back into SARIF
-                     for Code Scanning upload (pure, no I/O beyond the file)
+                     for Code Scanning upload (pure, no I/O beyond the file).
+                     Owns finding identity: fingerprints are unique per run,
+                     guaranteed here so the cache, the SARIF verdict map, issue
+                     dedupe and comment dedupe all inherit it. A scanner id is
+                     used only when it is one — semgrep emits the literal
+                     "requires login" on every result when unauthenticated —
+                     and a repeated id is discarded for every result carrying it
   scope/             diff scoping: `git diff --name-only base...HEAD` +
                      a pure filter over findings. Matches the FLAGGED location
                      only, never taint-trace hops
@@ -93,6 +99,14 @@ scan, and their line numbers are pinned to unit tests.
   unmodeled verdict strings, and absent/mismatched hashes are all misses. A
   wiped cache costs money, never safety. Pinned by
   `internal/cache/safety_test.go`; never add a path that trusts an entry harder.
+- **Identity is checked, not assumed**: `Lookup` takes a `cache.Key`
+  (fingerprint + ruleId + file) and misses when the entry's rule or file
+  disagrees. A fingerprint arrives from the scanner, so it is a key, not proof
+  the entry is about the finding asking. Two rules flagging one line is the case
+  that bites: same region, so a shared key also yields a *matching* codeHash and
+  the cache confirms the wrong verdict instead of missing. Same reasoning
+  wherever an entry is reached by key — see `IssueRef` inheritance in
+  `mergeVerdict`.
 - **Scope and gating are two explicit axes**: `-scope diff|full` decides what is
   triaged, `-mode enforce|report|baseline` decides whether it can fail the
   build. Never infer either from the other, from the trigger, or from cache
