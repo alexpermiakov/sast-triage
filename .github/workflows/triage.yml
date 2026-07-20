@@ -7,19 +7,16 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      provider:
-        description: LLM provider for this run
-        type: choice
-        options: [anthropic, openai]
-        default: anthropic
       model:
-        description: "Model (empty = provider default: claude-sonnet-5 / qwen2.5-coder:1.5b-instruct)"
+        description: "Model to triage with, e.g. DeepSeek-V4-Pro or claude-sonnet-5"
+        type: string
+        required: true
+        default: DeepSeek-V4-Pro
+      base_url:
+        description: "OpenAI-compatible endpoint — clear it to use Claude's native API instead"
         type: string
         required: false
-      base_url:
-        description: OpenAI-compatible endpoint (openai only); localhost:11434 starts a local Ollama
-        type: string
-        default: http://localhost:11434/v1
+        default: https://api.deepseek.com/v1
 
 concurrency:
   group: triage-${{ github.ref }}
@@ -32,40 +29,49 @@ permissions:
   security-events: write
 
 env:
-  # Provider for push/PR runs (workflow_dispatch picks per run): anthropic | openai
-  TRIAGE_PROVIDER: anthropic
-  # Per-provider default models; the workflow_dispatch `model` input overrides.
-  ANTHROPIC_MODEL: claude-sonnet-5
-  OPENAI_MODEL: qwen2.5-coder:1.5b-instruct
-  # openai only. Pointing it at localhost:11434 starts a local Ollama in the job.
-  OPENAI_BASE_URL: http://localhost:11434/v1
+  # Model + endpoint for push/PR runs; the workflow_dispatch inputs override both.
+  # DeepSeek triages this repo for roughly a thirtieth of Claude's cost; clearing
+  # TRIAGE_BASE_URL switches back to Claude's native API.
+  TRIAGE_MODEL: DeepSeek-V4-Pro
+  TRIAGE_BASE_URL: https://api.deepseek.com/v1
 
 jobs:
   triage:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve provider/model
+      - name: Resolve model
         id: llm
         env:
-          INPUT_PROVIDER: ${{ inputs.provider }}
+          IS_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
           INPUT_MODEL: ${{ inputs.model }}
           INPUT_BASE_URL: ${{ inputs.base_url }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
-          PROVIDER="${INPUT_PROVIDER:-$TRIAGE_PROVIDER}"
-          if [ "$PROVIDER" = anthropic ]; then DEFAULT="$ANTHROPIC_MODEL"; else DEFAULT="$OPENAI_MODEL"; fi
+          MODEL="${INPUT_MODEL:-$TRIAGE_MODEL}"
+          if [ -z "$MODEL" ]; then
+            echo "::error::model is required — there is no default, and triaging with the wrong model silently produces wrong verdicts"
+            exit 1
+          fi
+          # On dispatch, take base_url verbatim: an operator who cleared the field
+          # is asking for Claude, so it must not fall back to the env default.
+          if [ "$IS_DISPATCH" = true ]; then BASE_URL="$INPUT_BASE_URL"; else BASE_URL="$TRIAGE_BASE_URL"; fi
+          # base-url alone selects the OpenAI-compatible path; empty means Claude's
+          # native API. Same inference the binary does, so neither is a default.
+          if [ -n "$BASE_URL" ]; then PROVIDER=openai; else PROVIDER=anthropic; fi
+          if [ "$PROVIDER" = anthropic ]; then KEY="$ANTHROPIC_API_KEY"; else KEY="$OPENAI_API_KEY"; fi
           SKIP=false
-          if [ "$PROVIDER" = anthropic ] && [ -z "$ANTHROPIC_API_KEY" ]; then
+          if [ -z "$KEY" ]; then
             SKIP=true
-            echo "::notice::no API key (fork PR?) — triage skipped."
+            echo "::notice::no $PROVIDER API key (fork PR?) — triage skipped."
           fi
           {
             echo "provider=$PROVIDER"
-            echo "model=${INPUT_MODEL:-$DEFAULT}"
-            echo "base_url=${INPUT_BASE_URL:-$OPENAI_BASE_URL}"
+            echo "model=$MODEL"
+            echo "base_url=$BASE_URL"
             echo "skip=$SKIP"
           } >> "$GITHUB_OUTPUT"
-          echo "triaging with $PROVIDER / ${INPUT_MODEL:-$DEFAULT}"
+          echo "triaging with $MODEL via $PROVIDER"
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -77,16 +83,6 @@ jobs:
           semgrep scan --config=auto --dataflow-traces \
             --exclude testdata --sarif-output=findings.sarif
 
-      - name: Start local Ollama and pull model
-        if: steps.llm.outputs.provider == 'openai' && contains(steps.llm.outputs.base_url, 'localhost:11434')
-        env:
-          MODEL: ${{ steps.llm.outputs.model }}
-        run: |
-          docker run -d -p 11434:11434 \
-            ollama/ollama@sha256:50ab2378567a62b811a2967759dd91f254864c3495cbe50576bd8a85bc6edd56 # 0.6.8
-          for i in $(seq 1 30); do curl -fsS http://localhost:11434/api/version && break || sleep 2; done
-          curl -fsS http://localhost:11434/api/pull -d "{\"name\":\"$MODEL\"}"
-
       # Dogfood: `uses: ./` resolves action.yml from this checkout, so PRs run
       # their own action code. PR gates on new exploitables (the default); push
       # opts out of the gate, files issues + writes the annotated SARIF.
@@ -96,8 +92,9 @@ jobs:
         with:
           provider: ${{ steps.llm.outputs.provider }}
           model: ${{ steps.llm.outputs.model }}
-          base-url: ${{ steps.llm.outputs.provider == 'openai' && steps.llm.outputs.base_url || '' }}
+          base-url: ${{ steps.llm.outputs.base_url }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           fail-on-new-exploitable: ${{ github.event_name == 'pull_request' }}
           create-issues: ${{ github.event_name != 'pull_request' }}
           triaged-sarif: ${{ github.event_name != 'pull_request' && 'triaged.sarif' || '' }}

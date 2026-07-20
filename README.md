@@ -71,7 +71,7 @@ On a different provider? Drop `provider` and name the endpoint instead:
 ```yaml
 with:
   base-url: https://api.deepseek.com/v1
-  model: deepseek-chat
+  model: DeepSeek-V4-Pro
   api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
 
@@ -164,11 +164,11 @@ Everything below has a working default — the quick starts above set `model`, `
 
 [BenchmarkJava](https://github.com/OWASP-Benchmark/BenchmarkJava) is the corpus this is measured on: one scan produces 2,376 findings, and a finding takes ~25k tokens to triage at `medium` effort — the agent re-sends the conversation each turn, so nearly all of that is input.
 
-| Model                      | Per finding | All 2,376 findings   |
-| -------------------------- | ----------- | -------------------- |
-| DeepSeek (`deepseek-chat`) | $0.003      | **$7.60** (measured) |
-| Claude Sonnet 5            | ~$0.09      | ~$220 (estimated)    |
-| Local Ollama               | $0          | $0                   |
+| Model             | Per finding | All 2,376 findings   |
+| ----------------- | ----------- | -------------------- |
+| `DeepSeek-V4-Pro` | $0.003      | **$7.60** (measured) |
+| Claude Sonnet 5   | ~$0.09      | ~$220 (estimated)    |
+| Local Ollama      | $0          | $0                   |
 
 Only the first run costs anything. Every finding after that is a cache hit until the code it cites changes, so re-running the same 2,376 findings is ~$0 and a PR that adds one new finding costs one finding.
 
@@ -310,7 +310,7 @@ opengrep and semgrep are the two that are tested — their `matchBasedId` finger
 
 Any OpenAI-compatible endpoint out of the box — Ollama, vLLM, LM Studio, DeepSeek, Kimi, OpenAI itself: name it with `-base-url` and `-model`, and that's the whole configuration. Claude via `-provider anthropic`, the one API that isn't OpenAI-shaped. Both are thin adapters over a one-method `Client` interface ([`internal/agent/client.go`](internal/agent/client.go)); a new provider is one file implementing `Complete`. The verdict logic is fail-closed, so a weaker local model produces more `uncertain` verdicts, never silent `benign` ones — and the cache records which model decided each verdict.
 
-Honest quality guidance: `claude-sonnet-5` is what this repo's CI uses and what produced the verdicts in [triage-cache.json](triage-cache.json). The tiny CPU model in the self-hosted quick-start (`qwen2.5-coder:1.5b`) proves the plumbing, not the judgment — expect mostly `uncertain` from it. Triaging locally for real means the biggest code model your hardware runs, and still budgeting for more `uncertain` verdicts than a frontier model leaves behind.
+Honest quality guidance: `DeepSeek-V4-Pro` is what this repo's CI uses and what produced the verdicts in [triage-cache.json](triage-cache.json) — chosen because it triages the whole backlog for a few dollars. The tiny CPU model in the self-hosted quick-start (`qwen2.5-coder:1.5b`) proves the plumbing, not the judgment — expect mostly `uncertain` from it. Triaging locally for real means the biggest code model your hardware runs, and still budgeting for more `uncertain` verdicts than a frontier model leaves behind.
 
 </details>
 
