@@ -48,6 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Your scanner goes here — CodeQL, gosec, Snyk Code, anything emitting SARIF 2.1.0
       - name: Scan → findings.sarif
         run: |
           pipx install semgrep
@@ -65,15 +66,13 @@ jobs:
         run: cat triage-report.md >> "$GITHUB_STEP_SUMMARY"
 ```
 
-Every verdict, with its evidence, shows up on the Actions run page. Swap the scan step for whatever you already run — opengrep, CodeQL, gosec, Bandit — as long as it writes SARIF 2.1.0 to `findings.sarif`.
-
 On a different provider? Drop `provider` and name the endpoint instead:
 
 ```yaml
-        with:
-          base-url: https://api.deepseek.com/v1
-          model: deepseek-chat
-          api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+with:
+  base-url: https://api.deepseek.com/v1
+  model: deepseek-chat
+  api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
 
 </details>
@@ -99,6 +98,7 @@ jobs:
       - uses: actions/checkout@v7
       - run: curl -fsS http://localhost:11434/api/pull -d '{"name":"qwen2.5-coder:1.5b-instruct"}'
 
+      # Your scanner goes here — CodeQL, gosec, Snyk Code, anything emitting SARIF 2.1.0
       - name: Scan → findings.sarif
         run: |
           pipx install semgrep
@@ -155,44 +155,49 @@ Every run writes **`triage-report.md`** — every verdict with its reasoning and
 
 The cache PR, Security tab, and Issues are wiring the Quick Start leaves out to stay short — the [workflow this repo runs on itself](.github/workflows/triage.yml) has all three.
 
-## Cost Examples
-
-Estimates at Claude Sonnet pricing, `medium` effort — a typical finding takes 2k–6k tokens:
-
-| Scenario                          | Tokens    | Cost        |
-| --------------------------------- | --------- | ----------- |
-| First run (50 findings, `medium`) | ~60k–300k | $0.30–$1.50 |
-| Second run (cache hits)           | ~0        | ~$0         |
-| Incremental (1 new + 49 cache)    | ~6k       | $0.03       |
-
-Only the first run costs real money — after that, the cache answers everything except new findings.
-
 ## Reference
 
 Everything below has a working default — the quick starts above set `model`, `api-key`, and nothing else.
+
+<details>
+<summary><b>What it costs</b> — a full run on OWASP BenchmarkJava, 2,376 findings</summary>
+
+[BenchmarkJava](https://github.com/OWASP-Benchmark/BenchmarkJava) is the corpus this is measured on: one scan produces 2,376 findings, and a finding takes ~25k tokens to triage at `medium` effort — the agent re-sends the conversation each turn, so nearly all of that is input.
+
+| Model                      | Per finding | All 2,376 findings   |
+| -------------------------- | ----------- | -------------------- |
+| DeepSeek (`deepseek-chat`) | $0.003      | **$7.60** (measured) |
+| Claude Sonnet 5            | ~$0.09      | ~$220 (estimated)    |
+| Local Ollama               | $0          | $0                   |
+
+Only the first run costs anything. Every finding after that is a cache hit until the code it cites changes, so re-running the same 2,376 findings is ~$0 and a PR that adds one new finding costs one finding.
+
+That is the whole backlog, once — against $15k–18k a year for a 50-developer seat licence.
+
+</details>
 
 <details>
 <summary><b>All flags & action inputs</b></summary>
 
 The GitHub Action exposes every flag as an input of the same name, minus the leading dash — `-base-url` becomes `base-url:`, `-fail-on-new-exploitable` becomes `fail-on-new-exploitable:` — with identical defaults:
 
-| Flag                       | Default              | Purpose                                                                                           |
-| -------------------------- | -------------------- | ------------------------------------------------------------------------------------------------- |
-| `-provider`                | inferred             | Only needed for `anthropic` (Claude's native API); `-base-url` alone implies `openai`             |
-| `-base-url`                | —                    | The endpoint. **No default** — the tool only ever talks to the host you name                      |
-| `-model`                   | —                    | **Required, no default** — e.g. `claude-sonnet-5` (anthropic), `qwen2.5-coder:7b` (openai)        |
-| `-sarif`                   | `findings.sarif`     | SARIF 2.1.0 input                                                                                 |
-| `-repo`                    | `.`                  | Repository root the findings refer to                                                             |
-| `-cache`                   | `triage-cache.json`  | Verdict cache (commit it to git)                                                                  |
-| `-report`                  | `triage-report.md`   | Markdown report output                                                                            |
-| `-triaged-sarif`           | —                    | Verdict-annotated SARIF copy for Code Scanning upload                                             |
-| `-effort`                  | `medium`             | Depth: `small`, `medium`, `large`                                                                 |
-| `-max-findings-budget`     | `50`                 | Max findings triaged per run (0 = unlimited)                                                      |
-| `-parallel`                | `4`                  | Concurrent findings                                                                               |
-| `-fail-on-new-exploitable` | on                   | Exit 3 if this run finds a new exploitable; `=false` for runs that must not fail (push to main)   |
-| `-create-issues`           | off                  | File GitHub issues for exploitables (needs `GITHUB_TOKEN`)                                        |
-| `-github-repo`             | `$GITHUB_REPOSITORY` | `owner/name` for issue creation                                                                   |
-| `-link-base`               | —                    | E.g., `https://github.com/owner/repo/blob/<sha>`                                                  |
+| Flag                       | Default              | Purpose                                                                                         |
+| -------------------------- | -------------------- | ----------------------------------------------------------------------------------------------- |
+| `-provider`                | inferred             | Only needed for `anthropic` (Claude's native API); `-base-url` alone implies `openai`           |
+| `-base-url`                | —                    | The endpoint. **No default** — the tool only ever talks to the host you name                    |
+| `-model`                   | —                    | **Required, no default** — e.g. `claude-sonnet-5` (anthropic), `qwen2.5-coder:7b` (openai)      |
+| `-sarif`                   | `findings.sarif`     | SARIF 2.1.0 input                                                                               |
+| `-repo`                    | `.`                  | Repository root the findings refer to                                                           |
+| `-cache`                   | `triage-cache.json`  | Verdict cache (commit it to git)                                                                |
+| `-report`                  | `triage-report.md`   | Markdown report output                                                                          |
+| `-triaged-sarif`           | —                    | Verdict-annotated SARIF copy for Code Scanning upload                                           |
+| `-effort`                  | `medium`             | Depth: `small`, `medium`, `large`                                                               |
+| `-max-findings-budget`     | `50`                 | Max findings triaged per run (0 = unlimited)                                                    |
+| `-parallel`                | `4`                  | Concurrent findings                                                                             |
+| `-fail-on-new-exploitable` | on                   | Exit 3 if this run finds a new exploitable; `=false` for runs that must not fail (push to main) |
+| `-create-issues`           | off                  | File GitHub issues for exploitables (needs `GITHUB_TOKEN`)                                      |
+| `-github-repo`             | `$GITHUB_REPOSITORY` | `owner/name` for issue creation                                                                 |
+| `-link-base`               | —                    | E.g., `https://github.com/owner/repo/blob/<sha>`                                                |
 
 The action also takes `api-key` (routed to whichever provider you selected), plus `anthropic-api-key` / `openai-api-key` if you'd rather be explicit.
 
