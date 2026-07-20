@@ -103,7 +103,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	// arrive severity-sorted from the parser, so budget goes to the scary
 	// ones first.
 	for _, f := range findings {
-		if e, ok := c.Lookup(f.Fingerprint, cfg.RepoRoot, agent.FlaggedRegion(f)); ok {
+		if e, ok := c.Lookup(f.Fingerprint, cfg.RepoRoot, agent.FlaggedRegion(f), cfg.Model); ok {
 			items = append(items, itemFromEntry(f, e))
 			continue
 		}

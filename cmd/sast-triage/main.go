@@ -93,7 +93,7 @@ func main() {
 			fmt.Fprintln(os.Stderr, "sast-triage: -provider openai requires -base-url (e.g. http://localhost:11434/v1 for local Ollama)")
 			os.Exit(2)
 		}
-		cfg.Client = agent.NewOpenAIClient(*baseURL, os.Getenv("OPENAI_API_KEY"))
+		cfg.Client = agent.NewOpenAIClient(*baseURL, os.Getenv("OPENAI_API_KEY"), *parallel)
 	case "anthropic":
 		if cfg.Model == "" {
 			fmt.Fprintln(os.Stderr, "sast-triage: -provider anthropic requires -model (e.g. -model claude-sonnet-5)")

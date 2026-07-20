@@ -62,7 +62,10 @@ scan, and their line numbers are pinned to unit tests.
   fake client replaying canned tool-use transcripts.
 - **Cache invalidation**: `codeHash` = sha256 over the flagged region PLUS all
   evidence regions the verdict cited. Any drift in any of them invalidates the
-  entry. Never key invalidation on the flagged line alone.
+  entry. Never key invalidation on the flagged line alone. A model change
+  additionally retires `uncertain` entries and only those — `benign` and
+  `exploitable` are claims about the code and survive the swap. One cache file,
+  mixed models; never partition the cache by model.
 - **Cache writes are atomic**: marshal indented (human-reviewed in PR diffs),
   write temp file, rename. Parallel triage collects results via channel; single
   writer merges; save once.

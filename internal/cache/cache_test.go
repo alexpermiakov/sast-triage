@@ -173,21 +173,64 @@ func TestLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Cache{Version: Version, Entries: map[string]Entry{
-		"fp1": {Verdict: "exploitable", Evidence: evidence, CodeHash: h},
+		"fp1": {Verdict: "exploitable", Evidence: evidence, CodeHash: h, Model: "model-a"},
 	}}
 
-	if _, ok := c.Lookup("unknown", root, flagged); ok {
+	if _, ok := c.Lookup("unknown", root, flagged, "model-a"); ok {
 		t.Error("unknown fingerprint: want miss")
 	}
-	e, ok := c.Lookup("fp1", root, flagged)
+	e, ok := c.Lookup("fp1", root, flagged, "model-a")
 	if !ok || e.Verdict != "exploitable" {
 		t.Fatalf("want hit, got ok=%v e=%+v", ok, e)
 	}
 
 	// Evidence drift → miss, even though the flagged line is unchanged.
 	mutateLine(t, filepath.Join(root, "app/handlers.go"), 18, "\trow := s.db.QueryRow(query) // reviewed")
-	if _, ok := c.Lookup("fp1", root, flagged); ok {
+	if _, ok := c.Lookup("fp1", root, flagged, "model-a"); ok {
 		t.Error("evidence drift: want miss")
+	}
+}
+
+// A model change retires uncertain entries and only uncertain entries: a
+// non-answer is worth re-deciding, a decided verdict is a claim about the code
+// that the identity of the reader does not weaken.
+func TestLookupModelChange(t *testing.T) {
+	flagged := Region{File: "app/handlers.go", Start: 17, End: 17}
+	evidence := []string{"app/handlers.go:16", "app/handlers.go:18"}
+	root := copySampleApp(t)
+	h, err := CodeHash(root, flagged, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := func(verdict, model string) Entry {
+		return Entry{Verdict: verdict, Evidence: evidence, CodeHash: h, Model: model}
+	}
+	c := &Cache{Version: Version, Entries: map[string]Entry{
+		"benign":      entry("benign", "model-a"),
+		"exploitable": entry("exploitable", "model-a"),
+		"uncertain":   entry("uncertain", "model-a"),
+		"legacy":      entry("uncertain", ""), // pre-Model cache entry
+		"shortcircuit": {Verdict: "benign", Evidence: evidence, CodeHash: h,
+			Model: "rule:short-circuit"},
+	}}
+
+	for _, tc := range []struct {
+		fingerprint, model string
+		want               bool
+	}{
+		{"benign", "model-a", true},
+		{"benign", "model-b", true},
+		{"exploitable", "model-a", true},
+		{"exploitable", "model-b", true},
+		{"uncertain", "model-a", true},
+		{"uncertain", "model-b", false},
+		{"legacy", "model-b", false},
+		// Rule-decided, so no model decided it and no model change retires it.
+		{"shortcircuit", "model-b", true},
+	} {
+		if _, ok := c.Lookup(tc.fingerprint, root, flagged, tc.model); ok != tc.want {
+			t.Errorf("Lookup(%q, model=%q) ok=%v, want %v", tc.fingerprint, tc.model, ok, tc.want)
+		}
 	}
 }
 

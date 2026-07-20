@@ -75,6 +75,35 @@ cache backend.
 - Hit = fingerprint present AND codeHash matches current code. codeHash covers
   flagged region + every evidence region (a verdict is a fact about the code it
   read, not about the finding).
+- One file, mixed models. Entries record the deciding `model`, but the cache is
+  not partitioned by it (no per-model files/directories): the same finding would
+  then appear in N files, fragmenting the PR diff that *is* the audit trail, and
+  splitting ownership of `issueRef`. Model strings also make poor filenames —
+  against an OpenAI-compatible endpoint the name is whatever the server reports,
+  and the same weights answer to different names on different hosts.
+- **A model change retires `uncertain` entries only.** `model` is load-bearing
+  in `Lookup` for that one class:
+  - `uncertain` is a non-answer. Re-deciding it under the new model costs one
+    triage and can only improve on nothing, so a swap is a reason to retry.
+  - `benign` and `exploitable` survive. The invalidation contract is cited
+    evidence + codeHash — a claim about the code, which says nothing about who
+    read it. `Lookup` already ignores `decidedAt` for the same reason: a verdict
+    does not expire because time passed, and model identity is the same kind of
+    metadata. Re-running a decided verdict re-confirms at full price in the good
+    case, and lets a weaker model overturn a stronger one's work in the bad one
+    — and swap *direction* is not knowable without a model ranking, which would
+    encode a claim the tool cannot verify and that goes stale every release.
+  - Asymmetry rationale: a false `exploitable` costs an issue a human closes; a
+    false `benign` costs a shipped vulnerability plus an audit trail claiming it
+    was reviewed. Keeping `exploitable` across a swap is therefore the safe
+    direction, and it preserves `issueRef` rather than leaning on the
+    label-listing fallback every run.
+  - The control on a wrong `benign` is human review of its citations in the PR
+    diff, not a second model's opinion. Re-asking with the prior verdict seeded
+    would anchor the new model on the old one's conclusion — a confirmation-
+    shaped prompt that costs tokens and buys a biased check.
+  - Short-circuit entries carry `model: "rule:short-circuit"` and are always
+    `benign`, so no model change reaches them.
 - Rationale for git over scanner-native suppression (ignore files, inline
   suppression comments): per-finding granularity, non-destructive (verdicts,
   not deletions), carries reason/evidence/timestamps, PR-reviewable diff =
