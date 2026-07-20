@@ -14,19 +14,22 @@ branding:
 
 inputs:
   provider:
-    description: "LLM provider: openai (any OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, OpenAI itself) or anthropic"
-    default: openai
+    description: "LLM API shape: anthropic for Claude's native API, openai for anything OpenAI-compatible. Leave empty (the default) and base-url selects it for you"
+    default: ""
   model:
     description: "Model name — always required (e.g. claude-sonnet-5 for anthropic, qwen2.5-coder:7b for openai)"
     required: true
   base-url:
     description: "OpenAI-compatible API base URL; required when provider is openai (e.g. http://localhost:11434/v1). No default: the tool only ever talks to the endpoint you name"
     default: ""
+  api-key:
+    description: "API key for whichever provider is selected — routed to ANTHROPIC_API_KEY or OPENAI_API_KEY to match. Self-hosted endpoints need none. Prefer this over the provider-specific inputs below"
+    default: ""
   anthropic-api-key:
-    description: "API key for provider: anthropic. Alternative to setting ANTHROPIC_API_KEY as env on this step"
+    description: "Provider-specific alternative to api-key, for provider: anthropic. Wins over api-key when both are set"
     default: ""
   openai-api-key:
-    description: "API key for hosted OpenAI-compatible endpoints (local ones need none). Alternative to setting OPENAI_API_KEY as env on this step"
+    description: "Provider-specific alternative to api-key, for hosted OpenAI-compatible endpoints. Wins over api-key when both are set"
     default: ""
   sarif:
     description: SARIF 2.1.0 input produced by your scanner
@@ -142,6 +145,7 @@ runs:
         INPUT_PROVIDER: ${{ inputs.provider }}
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_BASE_URL: ${{ inputs.base-url }}
+        INPUT_API_KEY: ${{ inputs.api-key }}
         INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         INPUT_OPENAI_API_KEY: ${{ inputs.openai-api-key }}
         INPUT_SARIF: ${{ inputs.sarif }}
@@ -160,7 +164,7 @@ runs:
         INPUT_EXTRA_ARGS: ${{ inputs.extra-args }}
       run: |
         args=(
-          -provider "$INPUT_PROVIDER" -model "$INPUT_MODEL"
+          -model "$INPUT_MODEL"
           -sarif "$INPUT_SARIF" -repo "$INPUT_REPO"
           -cache "$INPUT_CACHE" -report "$INPUT_REPORT"
           -effort "$INPUT_EFFORT"
@@ -168,6 +172,9 @@ runs:
           -parallel "$INPUT_PARALLEL"
           -fail-on-new-exploitable="$INPUT_FAIL_ON_NEW_EXPLOITABLE"
         )
+        # Empty provider is passed as no flag at all, so the binary infers it
+        # from base-url rather than being pinned to a default it never chose.
+        if [ -n "$INPUT_PROVIDER" ]; then args+=(-provider "$INPUT_PROVIDER"); fi
         if [ -n "$INPUT_BASE_URL" ]; then args+=(-base-url "$INPUT_BASE_URL"); fi
         if [ -n "$INPUT_TRIAGED_SARIF" ]; then args+=(-triaged-sarif "$INPUT_TRIAGED_SARIF"); fi
         if [ -n "$INPUT_LINK_BASE" ]; then args+=(-link-base "$INPUT_LINK_BASE"); fi
@@ -176,6 +183,15 @@ runs:
         if [ -n "$INPUT_EXTRA_ARGS" ]; then
           read -r -a extra <<< "$INPUT_EXTRA_ARGS"
           args+=("${extra[@]}")
+        fi
+        # Generic api-key routes to the selected provider's env var; a
+        # provider-specific input, when set, wins over it.
+        if [ -n "$INPUT_API_KEY" ]; then
+          if [ "$INPUT_PROVIDER" = anthropic ]; then
+            export ANTHROPIC_API_KEY="$INPUT_API_KEY"
+          else
+            export OPENAI_API_KEY="$INPUT_API_KEY"
+          fi
         fi
         if [ -n "$INPUT_ANTHROPIC_API_KEY" ]; then export ANTHROPIC_API_KEY="$INPUT_ANTHROPIC_API_KEY"; fi
         if [ -n "$INPUT_OPENAI_API_KEY" ]; then export OPENAI_API_KEY="$INPUT_OPENAI_API_KEY"; fi

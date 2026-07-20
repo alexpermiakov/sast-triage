@@ -13,8 +13,16 @@ type AnthropicClient struct {
 	client anthropic.Client
 }
 
-func NewAnthropicClient(apiKey string) *AnthropicClient {
-	return &AnthropicClient{client: anthropic.NewClient(option.WithAPIKey(apiKey))}
+// NewAnthropicClient targets the Anthropic API. baseURL overrides the default
+// endpoint (a gateway or proxy speaking the native API); empty uses the SDK's
+// default. It is honoured rather than ignored so that a named endpoint is
+// never silently traded for api.anthropic.com.
+func NewAnthropicClient(apiKey, baseURL string) *AnthropicClient {
+	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if baseURL != "" {
+		opts = append(opts, option.WithBaseURL(baseURL))
+	}
+	return &AnthropicClient{client: anthropic.NewClient(opts...)}
 }
 
 func (a *AnthropicClient) Complete(ctx context.Context, req Request) (*Response, error) {
