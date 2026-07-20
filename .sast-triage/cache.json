@@ -1,4 +1,21 @@
 {
   "version": 1,
-  "entries": {}
+  "entries": {
+    "requires login": {
+      "ruleId": "yaml.github-actions.security.run-shell-injection.run-shell-injection",
+      "file": ".github/workflows/triage-seed.yml",
+      "verdict": "exploitable",
+      "reason": "The `run:` step at line 49 directly interpolates the user-supplied `inputs.model` (a `workflow_dispatch` input, controlled by whoever triggers the workflow) into the shell script via `${{ inputs.model }}`. Because GitHub Actions evaluates `${{ ... }}` before the shell parses the script, an attacker who sets `model` to a value containing shell metacharacters (e.g., `; rm -rf $HOME`) would have those characters interpreted as shell syntax, not as literal data. The same workflow demonstrates the safe pattern at lines 41-42, where `inputs.base_url` is passed through an environment variable instead of being interpolated directly. The action's own code (`action.yml:174-175`) confirms awareness: 'Inputs reach the shell only via env (never interpolated into the script), so a hostile model/base-url string cannot inject commands.' That safety property is violated here for `inputs.model`.",
+      "evidence": [
+        ".github/workflows/triage-seed.yml:15-19",
+        ".github/workflows/triage-seed.yml:41-42",
+        ".github/workflows/triage-seed.yml:49",
+        "action.yml:174-175"
+      ],
+      "codeHash": "sha256:88704c85f67f2272902e2271b7ffec72068c5ba6af77d4b606b389b369abbef1",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-20T21:24:34Z",
+      "tokensUsed": 47509
+    }
+  }
 }
