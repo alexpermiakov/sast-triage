@@ -28,8 +28,6 @@ graph LR
 
 ## Quick Start
 
-Two inputs decide everything, and neither is ever inferred: **`scope`** is what gets triaged (`diff` or `full`), **`mode`** is whether the result can fail your build (`enforce`, `report`, `baseline`). Each step below sets both.
-
 <details open>
 <summary><b>Step 1: seed the cache</b> — one <code>workflow_dispatch</code> run, one review PR, merged once</summary>
 
