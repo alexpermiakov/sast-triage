@@ -14,10 +14,10 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "Model to triage with, e.g. DeepSeek-V4-Pro or claude-sonnet-5"
+        description: "Model to triage with, e.g. deepseek-v4-flash or claude-sonnet-5"
         type: string
         required: true
-        default: DeepSeek-V4-Pro
+        default: deepseek-v4-flash
       base_url:
         description: "OpenAI-compatible endpoint — clear it to use Claude's native API instead"
         type: string
@@ -85,3 +85,4 @@ jobs:
             triage-report.md
             triage-digest.md
           retention-days: 7
+

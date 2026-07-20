@@ -32,11 +32,11 @@ The agent only reads code and writes verdicts to two files; your workflow decide
 
 Two inputs decide everything, and neither is ever inferred: **`scope`** is what gets triaged (`diff` or `full`), **`mode`** is whether the result can fail your build (`enforce`, `report`, `baseline`). Pick them from the trigger:
 
-| Trigger                | `scope` | `mode`     | Why                                                     |
-| ---------------------- | ------- | ---------- | ------------------------------------------------------- |
-| `pull_request`         | `diff`  | `enforce`  | Only what this PR touched, and it can fail the check     |
-| `schedule` / `push`    | `full`  | `report`   | Whole repo, advisory — catches what diff scope can't     |
-| `workflow_dispatch`    | `full`  | `baseline` | The one-off seeding run that creates your cache          |
+| Trigger             | `scope` | `mode`     | Why                                                  |
+| ------------------- | ------- | ---------- | ---------------------------------------------------- |
+| `pull_request`      | `diff`  | `enforce`  | Only what this PR touched, and it can fail the check |
+| `schedule` / `push` | `full`  | `report`   | Whole repo, advisory — catches what diff scope can't |
+| `workflow_dispatch` | `full`  | `baseline` | The one-off seeding run that creates your cache      |
 
 Start with seeding — it is a deliberate one-off, and the PR it opens is the most valuable thing this tool produces.
 
@@ -152,7 +152,7 @@ jobs:
           cache-write: none # artifact only, no commit
 ```
 
-**This run is not optional.** Diff scope has a structural hole: a change in `Foo.java` can make a *pre-existing* finding in `Bar.java` exploitable, and nothing keyed on changed files will ever see it. (Semgrep's baseline mode has the same hole.) The scheduled full-repo run is what closes it — that is the trade being made, stated plainly rather than papered over.
+**This run is not optional.** Diff scope has a structural hole: a change in `Foo.java` can make a _pre-existing_ finding in `Bar.java` exploitable, and nothing keyed on changed files will ever see it. (Semgrep's baseline mode has the same hole.) The scheduled full-repo run is what closes it — that is the trade being made, stated plainly rather than papered over.
 
 </details>
 
@@ -161,7 +161,7 @@ On a different provider? Drop `provider` and name the endpoint instead:
 ```yaml
 with:
   base-url: https://api.deepseek.com/v1
-  model: DeepSeek-V4-Pro
+  model: deepseek-v4-pro
   api-key: ${{ secrets.DEEPSEEK_API_KEY }}
 ```
 
@@ -298,28 +298,28 @@ That is the whole backlog, once — against $15k–18k a year for a 50-developer
 
 The GitHub Action exposes every flag as an input of the same name, minus the leading dash — `-base-url` becomes `base-url:`, `-base-ref` becomes `base-ref:` — with identical defaults:
 
-| Flag                   | Default                  | Purpose                                                                                    |
-| ---------------------- | ------------------------ | ------------------------------------------------------------------------------------------ |
-| `-provider`            | inferred                 | Only needed for `anthropic` (Claude's native API); `-base-url` alone implies `openai`      |
-| `-base-url`            | —                        | The endpoint. **No default** — the tool only ever talks to the host you name               |
-| `-model`               | —                        | **Required, no default** — e.g. `claude-sonnet-5` (anthropic), `qwen2.5-coder:7b` (openai) |
-| `-scope`               | `full`                   | `full` (everything in the SARIF) or `diff` (only findings in changed files)                 |
-| `-base-ref`            | —                        | Base to diff against for `-scope diff`, e.g. `origin/main`. Required with it                |
-| `-mode`                | `enforce`                | `enforce` (exit 3 on exploitables in scope), `report` (advisory), `baseline` (seeding)      |
-| `-sarif`               | `findings.sarif`         | SARIF 2.1.0 input                                                                          |
-| `-repo`                | `.`                      | Repository root the findings refer to                                                      |
-| `-cache`               | `.sast-triage/cache.json`| Verdict cache (commit it to git)                                                           |
-| `-report`              | `triage-report.md`       | Markdown report output — complete, uncapped                                                |
-| `-digest`              | `triage-digest.md`       | Size-bounded report for the step summary / a PR body; `""` skips it                        |
-| `-digest-bytes`        | `50000`                  | Digest cap — clears both the 1 MiB summary and 65,536-char PR body limits                  |
-| `-triaged-sarif`       | `triaged.sarif`          | SARIF copy with benign findings relabelled via `suppressions[]`; `""` skips it             |
-| `-effort`              | `medium`                 | Depth: `small`, `medium`, `large`                                                          |
-| `-max-findings-budget` | `50`                     | Max findings triaged per run (0 = unlimited)                                               |
-| `-parallel`            | `4`                      | Concurrent findings                                                                        |
-| `-pr` / `-commit`      | —                        | PR number + head SHA for inline comments (the action fills both from the event)            |
-| `-create-issues`       | off                      | File GitHub issues for exploitables (needs `GITHUB_TOKEN`)                                 |
-| `-github-repo`         | `$GITHUB_REPOSITORY`     | `owner/name` for issue creation                                                            |
-| `-link-base`           | —                        | E.g., `https://github.com/owner/repo/blob/<sha>`                                           |
+| Flag                   | Default                   | Purpose                                                                                    |
+| ---------------------- | ------------------------- | ------------------------------------------------------------------------------------------ |
+| `-provider`            | inferred                  | Only needed for `anthropic` (Claude's native API); `-base-url` alone implies `openai`      |
+| `-base-url`            | —                         | The endpoint. **No default** — the tool only ever talks to the host you name               |
+| `-model`               | —                         | **Required, no default** — e.g. `claude-sonnet-5` (anthropic), `qwen2.5-coder:7b` (openai) |
+| `-scope`               | `full`                    | `full` (everything in the SARIF) or `diff` (only findings in changed files)                |
+| `-base-ref`            | —                         | Base to diff against for `-scope diff`, e.g. `origin/main`. Required with it               |
+| `-mode`                | `enforce`                 | `enforce` (exit 3 on exploitables in scope), `report` (advisory), `baseline` (seeding)     |
+| `-sarif`               | `findings.sarif`          | SARIF 2.1.0 input                                                                          |
+| `-repo`                | `.`                       | Repository root the findings refer to                                                      |
+| `-cache`               | `.sast-triage/cache.json` | Verdict cache (commit it to git)                                                           |
+| `-report`              | `triage-report.md`        | Markdown report output — complete, uncapped                                                |
+| `-digest`              | `triage-digest.md`        | Size-bounded report for the step summary / a PR body; `""` skips it                        |
+| `-digest-bytes`        | `50000`                   | Digest cap — clears both the 1 MiB summary and 65,536-char PR body limits                  |
+| `-triaged-sarif`       | `triaged.sarif`           | SARIF copy with benign findings relabelled via `suppressions[]`; `""` skips it             |
+| `-effort`              | `medium`                  | Depth: `small`, `medium`, `large`                                                          |
+| `-max-findings-budget` | `50`                      | Max findings triaged per run (0 = unlimited)                                               |
+| `-parallel`            | `4`                       | Concurrent findings                                                                        |
+| `-pr` / `-commit`      | —                         | PR number + head SHA for inline comments (the action fills both from the event)            |
+| `-create-issues`       | off                       | File GitHub issues for exploitables (needs `GITHUB_TOKEN`)                                 |
+| `-github-repo`         | `$GITHUB_REPOSITORY`      | `owner/name` for issue creation                                                            |
+| `-link-base`           | —                         | E.g., `https://github.com/owner/repo/blob/<sha>`                                           |
 
 Two action inputs have no flag behind them, because they are git plumbing rather than triage logic: **`cache-write`** (`branch` | `pr` | `none`) decides where the cache delta goes, and **`pr-comments`** (`true` | `false`) turns on inline comments, filling `-pr` and `-commit` from the event payload.
 
@@ -403,7 +403,7 @@ Whatever your scanner scans. The agent doesn't parse code — it reads it the wa
 
 A PR fails when `mode: enforce` and the run finds an **exploitable** verdict in scope (exit 3). Never on `uncertain`, never on `benign`, and never on findings outside the change — `scope: diff` means the gate only ever considers files the PR touched. That is what makes it a gate people leave on.
 
-Note what the gate does *not* depend on: whether a verdict was decided this run or came from the cache. Making the exit code a function of cache state means the same code passes or fails depending on who merged a cache update first, and a wiped cache turns your whole backlog into "new". Scope is what keeps the backlog out, not cache freshness.
+Note what the gate does _not_ depend on: whether a verdict was decided this run or came from the cache. Making the exit code a function of cache state means the same code passes or fails depending on who merged a cache update first, and a wiped cache turns your whole backlog into "new". Scope is what keeps the backlog out, not cache freshness.
 
 Verdicts live in git (`.sast-triage/cache.json`), keyed to the evidence they cite, and are approved by humans: the seed PR for the initial backlog, then each feature PR's own cache diff. One exception, stated out loud when it happens — on a repo with **no cache at all**, `enforce` reports instead of failing and tells you to seed first, because there is no reviewed baseline for it to be enforcing against.
 
