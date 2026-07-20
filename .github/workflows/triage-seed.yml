@@ -38,15 +38,20 @@ jobs:
     steps:
       - name: Resolve provider
         id: llm
+        # Both dispatch inputs reach the shell as env vars and never as
+        # `${{ }}` inside the script. GitHub expands `${{ }}` BEFORE bash sees
+        # the line, so a model name of `x"; rm -rf $HOME; #` would be executed
+        # rather than printed. Same rule action.yml states for its own inputs.
         env:
           INPUT_BASE_URL: ${{ inputs.base_url }}
+          INPUT_MODEL: ${{ inputs.model }}
         run: |
           # base-url alone selects the OpenAI-compatible path; empty means
           # Claude's native API. Same inference the binary does, so neither is
           # a default nobody chose.
           if [ -n "$INPUT_BASE_URL" ]; then PROVIDER=openai; else PROVIDER=anthropic; fi
           echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
-          echo "seeding with ${{ inputs.model }} via $PROVIDER"
+          echo "seeding with $INPUT_MODEL via $PROVIDER"
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
