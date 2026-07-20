@@ -30,6 +30,12 @@ func sampleItems() []Item {
 		{
 			Fingerprint: "fp-unc", RuleID: "go.lang.security.audit.xss",
 			File: "app/render.go", StartLine: 3, EndLine: 3, Severity: 5.0, Level: "warning",
+			Verdict: "uncertain", Reason: "template escaping could not be traced to a sink",
+			TokensUsed: 800,
+		},
+		{
+			Fingerprint: "fp-deferred", RuleID: "go.lang.security.audit.path-traversal",
+			File: "app/files.go", StartLine: 12, EndLine: 12, Severity: 6.0, Level: "warning",
 			Verdict: "uncertain", Reason: "deferred: run budget exhausted", Deferred: true,
 		},
 	}
@@ -47,11 +53,17 @@ func TestRenderSectionOrder(t *testing.T) {
 	if !(benignAt < exploitAt && exploitAt < uncertainAt) {
 		t.Error("sections must be ordered benign, exploitable, uncertain (scrutiny order)")
 	}
-	if !strings.Contains(out, "4 findings — **2 benign**") {
+	if !strings.Contains(out, "5 findings — **2 benign**") {
 		t.Errorf("summary line wrong:\n%s", strings.SplitN(out, "\n", 4)[2])
 	}
-	if !strings.Contains(out, "1 from cache, 3 newly triaged (1200 tokens)") {
+	if !strings.Contains(out, "1 from cache, 4 newly triaged (2000 tokens)") {
 		t.Errorf("cache/token accounting wrong:\n%s", out)
+	}
+	// Deferred is broken out of uncertain: it is an absent verdict, not one the
+	// model failed to reach, and conflating them misreports a budget shortfall
+	// as analytical uncertainty.
+	if !strings.Contains(out, "**1 uncertain**, **1 deferred** (not triaged)") {
+		t.Errorf("deferred must not be counted as uncertain:\n%s", out)
 	}
 	if !strings.Contains(out, "Issue: #42") {
 		t.Error("exploitable item must reference its issue")
@@ -84,6 +96,81 @@ func TestRenderEmptySections(t *testing.T) {
 	}
 	if !strings.Contains(out, "0 findings") {
 		t.Error("summary should still render")
+	}
+}
+
+// Deferred findings dominate any large-repo run (budget 50 against thousands
+// of findings), so they must never render as full stanzas.
+func TestRenderDeferredIsIndexedNotStanzas(t *testing.T) {
+	out := Render(sampleItems(), Options{})
+
+	if !strings.Contains(out, "## Deferred — not triaged this run (1)") {
+		t.Errorf("deferred findings need their own section:\n%s", out)
+	}
+	if !strings.Contains(out, "- `app/files.go:12` — `go.lang.security.audit.path-traversal` (severity 6.0)") {
+		t.Errorf("deferred index must carry location, rule and severity:\n%s", out)
+	}
+	if strings.Contains(out, "### `app/files.go:12`") {
+		t.Error("deferred finding rendered as a full stanza; that is what inflates the report")
+	}
+	if strings.Contains(out, "verdict source: deferred") {
+		t.Error("deferred findings have no verdict to source")
+	}
+}
+
+func TestRenderDigestPrioritisesExploitable(t *testing.T) {
+	out := RenderDigest(sampleItems(), Options{}, 0)
+
+	exploitAt := strings.Index(out, "## Exploitable")
+	benignAt := strings.Index(out, "## Proposed suppressions")
+	if exploitAt < 0 || benignAt < 0 {
+		t.Fatalf("missing sections:\n%s", out)
+	}
+	if exploitAt > benignAt {
+		t.Error("a size-capped surface must lead with exploitable, not with the benign veto queue")
+	}
+	if !strings.Contains(out, "triage-report.md") {
+		t.Error("digest must point at the complete report")
+	}
+}
+
+// The failure this guards against: byte-truncating the report keeps the
+// benign section (rendered first) and discards the exploitable findings.
+func TestRenderDigestDropsByPriorityNotByOffset(t *testing.T) {
+	items := sampleItems()
+	for i := range 400 {
+		items = append(items, Item{
+			Fingerprint: "fp-bulk", RuleID: "go.lang.security.audit.bulk",
+			File: "app/bulk.go", StartLine: i, EndLine: i, Severity: 4.0, Level: "warning",
+			Verdict: "benign", Reason: strings.Repeat("padding reason ", 20),
+			Evidence: []string{"app/bulk.go:1"},
+		})
+	}
+
+	const cap = 4000
+	out := RenderDigest(items, Options{}, cap)
+
+	if len(out) > cap {
+		t.Errorf("digest is %d bytes, over the %d cap", len(out), cap)
+	}
+	// The one exploitable finding survives 400 benign ones competing for room.
+	if !strings.Contains(out, "app/handlers.go:17") {
+		t.Errorf("exploitable finding was dropped:\n%s", out)
+	}
+	if !strings.Contains(out, "omitted") {
+		t.Errorf("truncation must be stated, not silent:\n%s", out)
+	}
+}
+
+// A cap too small for even one stanza still has to report the totals rather
+// than emit nothing.
+func TestRenderDigestTinyCapKeepsHeadline(t *testing.T) {
+	out := RenderDigest(sampleItems(), Options{}, 1)
+	if !strings.Contains(out, "5 findings") {
+		t.Errorf("headline must survive any cap:\n%s", out)
+	}
+	if !strings.Contains(out, "triage-report.md") {
+		t.Errorf("pointer to the full report must survive any cap:\n%s", out)
 	}
 }
 
