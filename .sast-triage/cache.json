@@ -1,4 +1,20 @@
 {
   "version": 1,
-  "entries": {}
+  "entries": {
+    "requires login": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "benign",
+      "reason": "\"math/rand/v2\" is imported only for jitter in exponential backoff (line 215, backoff method), used solely to compute a sleep duration in the retry loop (line 169). The random value never leaves the process, is never exposed to an attacker, and is not used for any cryptographic or security-sensitive purpose (keys, tokens, nonces, or session identifiers). CWE-338 (weak PRNG for cryptography) does not apply to this non-security use. No attacker-controlled input reaches the sink.",
+      "evidence": [
+        "internal/agent/openai.go:9",
+        "internal/agent/openai.go:209-216",
+        "internal/agent/openai.go:165-171"
+      ],
+      "codeHash": "sha256:d9ce402221e6155dd3f607719417ff44919697e045052dbb9b42d714fba03055",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-20T21:33:55Z",
+      "tokensUsed": 43917
+    }
+  }
 }
