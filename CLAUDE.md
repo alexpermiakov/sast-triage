@@ -18,7 +18,11 @@ cmd/sast-triage/     main.go — flag parsing, wiring, exit codes only
 internal/
   sarif/             parse findings.sarif; annotate verdicts back into SARIF
                      for Code Scanning upload (pure, no I/O beyond the file)
-  cache/             triage-cache.json load/save, fingerprint+codeHash matching
+  scope/             diff scoping: `git diff --name-only base...HEAD` +
+                     a pure filter over findings. Matches the FLAGGED location
+                     only, never taint-trace hops
+  cache/             .sast-triage/cache.json load/save, fingerprint+codeHash
+                     matching
   agent/             the LLM loop: client, tools, budgets, verdict parsing.
                      Provider adapters behind one Client iface: openai.go (any
                      OpenAI-compatible endpoint, net/http only) and anthropic.go
@@ -29,22 +33,29 @@ internal/
                      endpoint the operator named or an API they asked for by
                      name. -base-url is honoured on both paths, never silently
                      dropped.
-  report/            triage-report.md rendering, GitHub issue bodies
-  github/            minimal Issues REST client (dedupe owned by cache issueRef)
-  pipeline/          run orchestration: partition, budget, errgroup fan-out,
-                     single-writer merge, issue routing
+  report/            triage-report.md rendering, GitHub issue + PR comment bodies
+  github/            minimal Issues + PR-review REST client (issue dedupe owned
+                     by cache issueRef; comment dedupe by fingerprint marker)
+  pipeline/          run orchestration: scope, partition, budget, errgroup
+                     fan-out, single-writer merge, issue + comment routing.
+                     mode.go owns the exit decision (Gate)
 action.yml           composite GitHub Action wrapping the binary; downloads the
                      prebuilt binary for the release named by SAST_TRIAGE_VERSION
                      (sha256 + provenance verified), or compiles the working tree
                      when run from a local checkout (github.action_path inside
                      github.workspace). Bump SAST_TRIAGE_VERSION in the commit you
-                     tag. Inputs mirror CLI flags 1:1, dogfooded by triage.yml via
-                     `uses: ./`
-.github/workflows/   ci.yml (lint+test on push/PR), triage.yml (dogfood: scans this
-                     repo on push/PR to main; PR jobs are read-only and gate on new
-                     exploitables, main jobs file issues (via the opt-in
-                     -create-issues flag) + refresh the triage/main cache
-                     review PR), release.yml (on v*.*.* tags: cross-compiles
+                     tag — release.yml refuses to publish when it disagrees with
+                     the tag, because the mismatch is invisible until it breaks
+                     every consumer's CI at once. Inputs mirror CLI flags 1:1
+                     (except cache-write and pr-comments, which are git plumbing
+                     with no flag behind them); dogfooded by the triage-*
+                     workflows via `uses: ./`
+.github/workflows/   ci.yml (lint+test on push/PR); triage workflows split one per
+                     trigger so each is readable alone — triage-pr.yml (diff scope,
+                     enforce, cache to the PR head branch, inline comments) and
+                     triage-seed.yml (full scope, baseline, one seed PR). The
+                     full-scope scheduled run the docs recommend is NOT dogfooded
+                     here; release.yml (on v*.*.* tags: cross-compiles
                      linux/darwin × amd64/arm64, attests provenance, uploads the
                      assets action.yml downloads)
 testdata/            real scanner SARIF fixtures, opengrep/semgrep format (pinned
@@ -76,6 +87,24 @@ scan, and their line numbers are pinned to unit tests.
   additionally retires `uncertain` entries and only those — `benign` and
   `exploitable` are claims about the code and survive the swap. One cache file,
   mixed models; never partition the cache by model.
+- **Cache-safety invariant**: a missing, damaged, or unverifiable entry means
+  RE-TRIAGE, never `benign`. `Lookup` re-checks the evidence bar at the trust
+  boundary (the file is hand-editable in git), so evidence-free `benign`,
+  unmodeled verdict strings, and absent/mismatched hashes are all misses. A
+  wiped cache costs money, never safety. Pinned by
+  `internal/cache/safety_test.go`; never add a path that trusts an entry harder.
+- **Scope and gating are two explicit axes**: `-scope diff|full` decides what is
+  triaged, `-mode enforce|report|baseline` decides whether it can fail the
+  build. Never infer either from the other, from the trigger, or from cache
+  presence. The gate fires on `exploitable` only — never `uncertain`, or it
+  becomes the gate everyone disables — and counts cached exploitables, because
+  an exit code that depends on cache freshness is not reproducible. The single
+  exception, which only relaxes the gate and must stay loud on stderr: an
+  unseeded repo reports instead of failing.
+- **The cache is never bot-PR'd onto a protected branch**: PR runs commit the
+  delta to the PR's own head branch (`cache-write: branch`); `cache-write: pr`
+  is for seeding only. Fork PRs and missing secrets degrade to artifact-only
+  with a notice, never a crash.
 - **Cache writes are atomic**: marshal indented (human-reviewed in PR diffs),
   write temp file, rename. Parallel triage collects results via channel; single
   writer merges; save once.
@@ -85,7 +114,9 @@ scan, and their line numbers are pinned to unit tests.
 
 ## Testing
 
-- Table tests for `sarif`, `cache`, `report` against fixtures in `testdata/`.
+- Table tests for `sarif`, `cache`, `report`, `scope` against fixtures in
+  `testdata/`. `scope` and the pipeline's diff tests build throwaway git repos
+  with `exec.Command` and skip when git is unavailable.
 - `internal/agent` tests: fake Anthropic client with scripted tool_use sequences,
   covering: 1-turn resolve, multi-turn trace-following, iteration-cap exhaustion,
   malformed verdict JSON (→ one retry → uncertain), path-traversal tool call

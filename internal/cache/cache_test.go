@@ -34,7 +34,7 @@ func TestLoadErrors(t *testing.T) {
 }
 
 func TestSaveLoadRoundtrip(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "triage-cache.json")
+	path := filepath.Join(t.TempDir(), "cache.json")
 	c := &Cache{Version: Version, Entries: map[string]Entry{
 		"fp1": {
 			RuleID:    "rule.a",

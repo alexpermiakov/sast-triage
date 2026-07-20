@@ -1,5 +1,6 @@
-// Package cache manages triage-cache.json: verdicts keyed by SARIF fingerprint,
-// invalidated by a codeHash over the flagged region plus every evidence region.
+// Package cache manages .sast-triage/cache.json: verdicts keyed by SARIF
+// fingerprint, invalidated by a codeHash over the flagged region plus every
+// evidence region.
 package cache
 
 import (
@@ -15,10 +16,16 @@ import (
 
 const Version = 1
 
-// VerdictUncertain is the one verdict class a model change invalidates. It is
-// spelled out here rather than imported from internal/agent because agent
-// imports cache; the rule has to live next to Lookup that enforces it.
-const VerdictUncertain = "uncertain"
+// The three verdict classes, spelled out here rather than imported from
+// internal/agent because agent imports cache. They live next to the Lookup
+// that enforces the rules keyed on them: uncertain is the one class a model
+// change invalidates, benign is the one class that must carry evidence, and
+// anything outside the set is a damaged entry.
+const (
+	VerdictBenign      = "benign"
+	VerdictExploitable = "exploitable"
+	VerdictUncertain   = "uncertain"
+)
 
 // Cache is the on-disk triage cache. Entries are keyed by matchBasedId
 // fingerprint; all verdict classes are stored (exploitable verdicts are memory
@@ -91,7 +98,13 @@ func (c *Cache) Save(path string) error {
 	}
 	data = append(data, '\n')
 
+	// The default cache lives in .sast-triage/, which does not exist on a
+	// repo's first run. Create it here rather than making every caller
+	// (binary, action, tests) remember to.
 	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("save cache: %w", err)
+	}
 	tmp, err := os.CreateTemp(dir, ".triage-cache-*.tmp")
 	if err != nil {
 		return fmt.Errorf("save cache: %w", err)
@@ -113,10 +126,15 @@ func (c *Cache) Save(path string) error {
 	return nil
 }
 
-// Lookup returns the entry for fingerprint if it exists, its codeHash still
-// matches the current code, AND a model change has not retired it. Any failure
-// to recompute the hash (moved file, drifted lines, malformed refs) is a miss:
-// the verdict no longer describes the code.
+// Lookup returns the entry for fingerprint if it exists, meets the evidence
+// bar, its codeHash still matches the current code, AND a model change has not
+// retired it. Any failure to recompute the hash (moved file, drifted lines,
+// malformed refs) is a miss: the verdict no longer describes the code.
+//
+// The invariant every miss upholds: a missing, damaged, or unverifiable entry
+// causes RE-TRIAGE, never a benign verdict. A wiped or hand-mangled cache costs
+// money, never safety — every path out of here that is not a fully verified
+// entry returns false, and the caller then pays for a fresh triage.
 //
 // Deciding under a different model retires uncertain entries only. uncertain is
 // a non-answer, so re-deciding it costs one triage and can only improve on
@@ -133,6 +151,23 @@ func (c *Cache) Lookup(fingerprint, repoRoot string, flagged Region, model strin
 	// Checked before hashing: a retired entry is a miss whatever the code says,
 	// and this skips reading every evidence region to prove it.
 	if e.Verdict == VerdictUncertain && e.Model != model {
+		return Entry{}, false
+	}
+	// The evidence bar again, at the trust boundary. The agent already refuses
+	// to MINT an evidence-free benign, but the cache is a hand-editable file in
+	// git: "benign" typed into it by hand, or left behind by a truncating
+	// merge, must not suppress a finding on nothing. Re-check on read, where
+	// the untrusted input actually enters.
+	if e.Verdict == VerdictBenign && len(e.Evidence) == 0 {
+		return Entry{}, false
+	}
+	// An unmodeled verdict string is a damaged entry, not a fourth class.
+	switch e.Verdict {
+	case VerdictBenign, VerdictExploitable, VerdictUncertain:
+	default:
+		return Entry{}, false
+	}
+	if e.CodeHash == "" {
 		return Entry{}, false
 	}
 	h, err := CodeHash(repoRoot, flagged, e.Evidence)

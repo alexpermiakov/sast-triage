@@ -1,0 +1,91 @@
+# Pull requests: diff scope, enforcing gate, cache committed to the PR's own
+# head branch. One of three triage workflows, split by trigger so each one's
+# scope and gating are readable without cross-referencing the others.
+name: Triage (PR)
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: triage-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # commit the cache delta to the PR head branch
+  pull-requests: write # inline review comments
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      # The PR head SHA, not the merge commit: the cache delta is committed on
+      # top of it and pushed to the head branch, which has to be a fast-forward.
+      # fetch-depth 0 so origin/<base> exists for the diff.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Check for an API key
+        id: llm
+        env:
+          OPENAI_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          # Fork PRs get no secrets. Triage is skipped rather than failed: a
+          # contributor cannot fix a missing secret, and a red X they cannot
+          # act on teaches everyone to ignore this check.
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::no API key (fork PR?) — triage skipped."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # testdata stays excluded: those fixtures' line numbers are pinned to unit
+      # tests, and the agent short-circuits them to benign anyway.
+      - name: Scan
+        if: steps.llm.outputs.skip != 'true'
+        run: |
+          pipx install semgrep
+          semgrep scan --config=auto --dataflow-traces \
+            --exclude testdata --sarif-output=findings.sarif
+
+      # Dogfood: `uses: ./` resolves action.yml from this checkout, so PRs run
+      # their own action code.
+      - name: Triage
+        if: steps.llm.outputs.skip != 'true'
+        uses: ./
+        with:
+          provider: openai
+          model: DeepSeek-V4-Pro
+          base-url: https://api.deepseek.com/v1
+          openai-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          scope: diff
+          base-ref: origin/${{ github.base_ref }}
+          mode: enforce
+          cache-write: branch
+          pr-comments: "true"
+          link-base: https://github.com/${{ github.repository }}/blob/${{ github.event.pull_request.head.sha }}
+
+      # The digest, not the report: the step summary caps at 1 MiB, and a large
+      # backlog blows past that. The complete report rides in the artifact.
+      - name: Publish digest to run summary
+        if: always()
+        run: '[ -f triage-digest.md ] && cat triage-digest.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      # Emitted on every run, gate or no gate: the annotated SARIF relabels
+      # benign findings via suppressions[] and deletes nothing, so it is the
+      # integration surface for DefectDojo and friends.
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: triage-${{ github.run_id }}
+          path: |
+            findings.sarif
+            triaged.sarif
+            triage-report.md
+            triage-digest.md
+            .sast-triage/cache.json
+          retention-days: 7

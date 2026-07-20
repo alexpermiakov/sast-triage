@@ -31,7 +31,10 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# sast-triage run artifacts (the cache IS committed; these are not)
+# sast-triage run artifacts. .sast-triage/cache.json IS committed — it is the
+# reviewed suppression set; everything below is regenerated every run.
 /sast-triage
 /findings.sarif
+/triaged.sarif
 /triage-report.md
+/triage-digest.md

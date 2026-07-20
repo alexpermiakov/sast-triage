@@ -1,7 +1,10 @@
-// Package github is a minimal Issues client for routing exploitable verdicts.
-// Deduplication is owned by the cache (issueRef != 0 → already filed); listing
-// exists so filing can adopt an already-filed issue when the cache entry lost
-// its issueRef (e.g. the run that filed it never landed on this branch).
+// Package github is a minimal Issues + pull-request-review client for routing
+// verdicts to where people already look. Issue deduplication is owned by the
+// cache (issueRef != 0 → already filed); listing exists so filing can adopt an
+// already-filed issue when the cache entry lost its issueRef (e.g. the run that
+// filed it never landed on this branch). Review comments dedupe on the
+// fingerprint marker in the body, because they are not recorded in the cache —
+// a comment belongs to one PR, the cache outlives every PR.
 package github
 
 import (

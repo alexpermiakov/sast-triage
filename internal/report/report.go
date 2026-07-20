@@ -303,6 +303,30 @@ func IssueBody(it Item, opts Options) string {
 	return b.String()
 }
 
+// ReviewCommentBody renders one inline pull-request comment for an exploitable
+// finding. It is deliberately shorter than IssueBody: this lands in the middle
+// of someone's diff, where the finding, the reason, and the evidence to check
+// are the whole job — location and severity are already implied by where the
+// comment sits. The fingerprint marker rides along so a re-run recognizes its
+// own comment instead of posting a second one.
+func ReviewCommentBody(it Item, opts Options) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "**sast-triage: exploitable** — `%s`\n\n", shortRule(it.RuleID))
+	fmt.Fprintf(&b, "%s\n\n", it.Message)
+	fmt.Fprintf(&b, "**Why it is exploitable:** %s\n", it.Reason)
+	if len(it.Evidence) > 0 {
+		b.WriteString("\n**Evidence:**\n")
+		for _, ref := range it.Evidence {
+			fmt.Fprintf(&b, "- %s\n", link(ref, opts))
+		}
+	}
+	if it.IssueRef != 0 {
+		fmt.Fprintf(&b, "\nTracked in #%d.\n", it.IssueRef)
+	}
+	fmt.Fprintf(&b, "\n%s\n", FingerprintMarker(it.Fingerprint))
+	return b.String()
+}
+
 // filter selects one verdict class. Deferred findings are excluded from every
 // verdict class: they were never triaged, so their nominal `uncertain` is an
 // absence of a verdict rather than one.
