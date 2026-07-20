@@ -9,7 +9,7 @@
 
 AI triage for this already exists — Semgrep Teams, GitHub Code Security, and Snyk ship it in their paid tiers at $25–30 per developer per month: a 50-developer team pays $15k–18k a year, and enterprise plans cost more.
 
-`sast-triage` does the same job without the per-developer fee — MIT licence, one Go binary, bring your own model (local Ollama = $0, or your Claude API key).
+**sast-triage** does the same job without the per-developer fee — MIT licence, one Go binary, bring your own model (local Ollama = $0, or your Claude API key).
 
 **It does what a security analyst would**: read the code behind each finding, trace the taint, decide if it's real — with cited evidence. Nothing is suppressed on the model's word alone: every `benign` verdict lands as a reviewable PR diff, and a human merges it. After the first run, triage costs ~$0.
 
@@ -39,10 +39,12 @@ graph LR
 
 ## Quick Start
 
-<details open>
-<summary><b>Claude</b> — what this repo's own CI uses</summary>
+Three complete paths — each one is a working setup end to end, scanner included. Pick one, add the key, done.
 
-Add an `ANTHROPIC_API_KEY` repo secret, then add this to your CI — as a new `.github/workflows/triage.yml`, or copy the `triage` job into a workflow you already have:
+<details open>
+<summary><b>Hosted API</b> (Claude or any OpenAI-compatible provider) — what this repo's own CI uses</summary>
+
+Add an `ANTHROPIC_API_KEY` repo secret, then save this as `.github/workflows/triage.yml` — or copy the `triage` job into a workflow you already have:
 
 ```yaml
 name: Triage
@@ -55,7 +57,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # → produce findings.sarif with your scanner here (opengrep example below ⬇)
+      - name: Scan → findings.sarif
+        run: |
+          curl -fsSLo /usr/local/bin/opengrep \
+            https://github.com/opengrep/opengrep/releases/download/v1.25.0/opengrep_manylinux_x86
+          chmod +x /usr/local/bin/opengrep
+          git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
+          opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
 
       - name: Triage — fail only on NEW exploitable findings
         uses: alexpermiakov/sast-triage@v1
@@ -65,12 +73,23 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+Swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules) — or drop the whole scan step and keep whatever scanner already emits SARIF 2.1.0 (Semgrep, CodeQL, Snyk Code, gosec, Bandit).
+
+For a hosted OpenAI-compatible provider instead of Claude, the same job with three inputs changed:
+
+```yaml
+with:
+  base-url: https://api.openai.com/v1 # or any OpenAI-compatible host
+  model: gpt-5
+  openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+```
+
 </details>
 
 <details>
-<summary><b>Local model</b> (OpenAI-compatible) — no API key, no cost, nothing leaves the runner</summary>
+<summary><b>Self-hosted model</b> (Ollama, vLLM, LM Studio) — no API key, no cost, nothing leaves the runner</summary>
 
-This path is built for your own on-premise runners: the model sits next to the code and nothing crosses the fence.
+Built for your own on-premise runners: the model sits next to the code and nothing crosses the fence.
 
 ```yaml
 name: Triage
@@ -88,7 +107,13 @@ jobs:
       - uses: actions/checkout@v7
       - run: curl -fsS http://localhost:11434/api/pull -d '{"name":"qwen2.5-coder:1.5b-instruct"}'
 
-      # → produce findings.sarif with your scanner here (opengrep example below ⬇)
+      - name: Scan → findings.sarif
+        run: |
+          curl -fsSLo /usr/local/bin/opengrep \
+            https://github.com/opengrep/opengrep/releases/download/v1.25.0/opengrep_manylinux_x86
+          chmod +x /usr/local/bin/opengrep
+          git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
+          opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
 
       - name: Triage — fail only on NEW exploitable findings
         uses: alexpermiakov/sast-triage@v1
@@ -97,29 +122,12 @@ jobs:
           model: qwen2.5-coder:1.5b-instruct
 ```
 
-The same two inputs point at any OpenAI-compatible endpoint — vLLM, LM Studio, or OpenAI itself.
+`base-url` + `model` point at any OpenAI-compatible server — swap in vLLM or LM Studio by changing the URL. That 1.5b model proves the plumbing, not the judgment — for real local verdicts run the biggest code model your hardware fits, and expect more `uncertain` than a frontier model leaves behind.
 
 </details>
 
 <details>
-<summary><b>The scan step</b> — producing <code>findings.sarif</code> (opengrep here, but any SARIF scanner works)</summary>
-
-Any scanner that emits SARIF 2.1.0 plugs in — Semgrep, CodeQL, Snyk Code, gosec, Bandit; swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules):
-
-```yaml
-- name: Scan with opengrep → findings.sarif
-  run: |
-    curl -fsSLo /usr/local/bin/opengrep \
-      https://github.com/opengrep/opengrep/releases/download/v1.25.0/opengrep_manylinux_x86
-    chmod +x /usr/local/bin/opengrep
-    git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
-    opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
-```
-
-</details>
-
-<details>
-<summary><b>Run it directly</b> — one-off triage outside CI</summary>
+<summary><b>Run it locally on your machine</b> — one-off triage, no CI</summary>
 
 Nothing is sent anywhere you didn't name: `-base-url` is always explicit, so pointing it at local Ollama keeps everything on your machine.
 
@@ -130,15 +138,16 @@ go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
 git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
 opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
 
-# 2. Triage — local model via Ollama…
+# 2a. Triage with a local model via Ollama…
 ollama serve &                        # http://localhost:11434
 ollama pull qwen2.5-coder:7b
 sast-triage -sarif findings.sarif -repo . \
   -base-url http://localhost:11434/v1 -model qwen2.5-coder:7b
 
-#    …or Claude
-sast-triage -provider anthropic -model claude-sonnet-5 \
-  -sarif findings.sarif -repo .
+# 2b. …or with Claude (needs ANTHROPIC_API_KEY in your environment)
+export ANTHROPIC_API_KEY=sk-ant-...
+sast-triage -sarif findings.sarif -repo . \
+  -provider anthropic -model claude-sonnet-5
 
 cat triage-report.md
 ```
@@ -279,7 +288,7 @@ No. It consumes SARIF 2.1.0 from any scanner. opengrep and semgrep are what's te
 
 Any OpenAI-compatible endpoint out of the box (`-provider openai`, the default): Ollama, vLLM, LM Studio, or OpenAI itself — pick with `-base-url` and `-model`. Claude via `-provider anthropic`. Both are thin adapters over a one-method `Client` interface ([`internal/agent/client.go`](internal/agent/client.go)); a new provider is one file implementing `Complete`. The verdict logic is fail-closed, so a weaker local model produces more `uncertain` verdicts, never silent `benign` ones — and the cache records which model decided each verdict.
 
-Honest quality guidance: `claude-sonnet-5` is what this repo's CI uses and what produced the verdicts in [triage-cache.json](triage-cache.json). The tiny CPU model in the local-model demo (`qwen2.5-coder:1.5b`) proves the plumbing, not the judgment — expect mostly `uncertain` from it. Triaging locally for real means the biggest code model your hardware runs, and still budgeting for more `uncertain` verdicts than a frontier model leaves behind.
+Honest quality guidance: `claude-sonnet-5` is what this repo's CI uses and what produced the verdicts in [triage-cache.json](triage-cache.json). The tiny CPU model in the self-hosted quick-start (`qwen2.5-coder:1.5b`) proves the plumbing, not the judgment — expect mostly `uncertain` from it. Triaging locally for real means the biggest code model your hardware runs, and still budgeting for more `uncertain` verdicts than a frontier model leaves behind.
 
 </details>
 
