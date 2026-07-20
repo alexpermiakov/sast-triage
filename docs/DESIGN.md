@@ -115,10 +115,22 @@ cache backend.
   path-validated, repo-rooted.
 - Provider-agnostic behind a one-method `Client` interface. Two adapters:
   `openai` (any OpenAI-compatible endpoint — Ollama/vLLM/LM Studio/OpenAI, plain
-  net/http, no SDK) and `anthropic` (native SDK). Default provider is `openai`,
-  and its `-base-url` is required with no default — the tool never invents an
-  endpoint, so it only ever talks to the host the operator names (point it at
-  local Ollama and nothing leaves the machine). The loop keys on tool-use
+  net/http, no SDK) and `anthropic` (native SDK).
+- Endpoint selection is by `-base-url`, not by naming a provider. `-provider`
+  defaults to empty and is inferred: a `-base-url` on its own selects `openai`,
+  so the common case never types a provider at all; `-provider anthropic` opts
+  into the one API that is not OpenAI-shaped. Naming neither is a usage error
+  listing both exits — deliberately not a default, because every default here
+  would be an endpoint the operator never asked for. That is what preserves the
+  invariant: the tool only ever talks to a host you named or an API you asked
+  for by name (point it at local Ollama and nothing leaves the machine).
+  `-base-url` is honoured on both paths, including `anthropic`, where it
+  overrides the SDK endpoint for a gateway or proxy. It is never accepted and
+  silently discarded — a named endpoint traded for `api.anthropic.com` without a
+  word is precisely the failure this invariant exists to prevent.
+- `-provider openai` stays accepted explicitly, so existing invocations and any
+  future second native adapter (which would reintroduce a real choice) keep
+  working. The loop keys on tool-use
   blocks, not stop reasons, so adapters only map messages/tools/usage.
   Fail-closed verdicts mean a weaker local model yields more `uncertain`, never
   silent `benign`; the deciding model is recorded per cache entry.

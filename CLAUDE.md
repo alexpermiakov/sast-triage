@@ -21,10 +21,14 @@ internal/
   cache/             triage-cache.json load/save, fingerprint+codeHash matching
   agent/             the LLM loop: client, tools, budgets, verdict parsing.
                      Provider adapters behind one Client iface: openai.go (any
-                     OpenAI-compatible endpoint, net/http only — the default)
-                     and anthropic.go (native SDK). Default provider is openai;
-                     its -base-url is required (no default) so the tool only
-                     talks to the endpoint the operator names.
+                     OpenAI-compatible endpoint, net/http only) and anthropic.go
+                     (native SDK). -provider defaults to empty and is inferred
+                     from -base-url (base-url alone => openai); -provider
+                     anthropic opts into the native API. Naming neither is a
+                     usage error, never a default, so the tool only talks to an
+                     endpoint the operator named or an API they asked for by
+                     name. -base-url is honoured on both paths, never silently
+                     dropped.
   report/            triage-report.md rendering, GitHub issue bodies
   github/            minimal Issues REST client (dedupe owned by cache issueRef)
   pipeline/          run orchestration: partition, budget, errgroup fan-out,

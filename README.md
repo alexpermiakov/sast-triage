@@ -42,9 +42,9 @@ graph LR
 Three complete paths — each one is a working setup end to end, scanner included. Pick one, add the key, done.
 
 <details open>
-<summary><b>Hosted API</b> (Claude or any OpenAI-compatible provider) — what this repo's own CI uses</summary>
+<summary><b>Hosted API</b> (Claude, DeepSeek, Kimi, OpenAI, …) — what this repo's own CI uses</summary>
 
-Add an `ANTHROPIC_API_KEY` repo secret, then save this as `.github/workflows/triage.yml` — or copy the `triage` job into a workflow you already have:
+Add an `LLM_API_KEY` repo secret — a key from any provider below — then save this as `.github/workflows/triage.yml`, or copy the `triage` job into a workflow you already have:
 
 ```yaml
 name: Triage
@@ -57,31 +57,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Your SAST tool goes here — semgrep, opengrep, CodeQL, gosec, … anything emitting SARIF
       - name: Scan → findings.sarif
         run: |
-          curl -fsSLo /usr/local/bin/opengrep \
-            https://github.com/opengrep/opengrep/releases/download/v1.25.0/opengrep_manylinux_x86
-          chmod +x /usr/local/bin/opengrep
-          git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
-          opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
+          pipx install semgrep
+          semgrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
 
-      - name: Triage — fail only on NEW exploitable findings
+      - name: Triage
         uses: alexpermiakov/sast-triage@v1
         with:
+          api-key: ${{ secrets.LLM_API_KEY }}
+
+          # Claude — what this repo's CI runs:
           provider: anthropic
           model: claude-sonnet-5
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-```
 
-Swap `/tmp/rules/go` for your languages' [rule dirs](https://github.com/opengrep/opengrep-rules) — or drop the whole scan step and keep whatever scanner already emits SARIF 2.1.0 (Semgrep, CodeQL, Snyk Code, gosec, Bandit).
-
-For a hosted OpenAI-compatible provider instead of Claude, the same job with three inputs changed:
-
-```yaml
-with:
-  base-url: https://api.openai.com/v1 # or any OpenAI-compatible host
-  model: gpt-5
-  openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          # …or any OpenAI-compatible API - swap the two lines above for these:
+          # base-url: https://api.deepseek.com/v1
+          # model: DeepSeek-V4-Pro
 ```
 
 </details>
@@ -107,13 +100,11 @@ jobs:
       - uses: actions/checkout@v7
       - run: curl -fsS http://localhost:11434/api/pull -d '{"name":"qwen2.5-coder:1.5b-instruct"}'
 
+      # Your SAST tool goes here — semgrep, opengrep, CodeQL, gosec, … anything emitting SARIF
       - name: Scan → findings.sarif
         run: |
-          curl -fsSLo /usr/local/bin/opengrep \
-            https://github.com/opengrep/opengrep/releases/download/v1.25.0/opengrep_manylinux_x86
-          chmod +x /usr/local/bin/opengrep
-          git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
-          opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
+          pipx install semgrep
+          semgrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
 
       - name: Triage — fail only on NEW exploitable findings
         uses: alexpermiakov/sast-triage@v1
@@ -134,9 +125,9 @@ Nothing is sent anywhere you didn't name: `-base-url` is always explicit, so poi
 ```bash
 go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
 
-# 1. Scan — anything emitting SARIF 2.1.0 works; opengrep is what's tested
-git clone --depth 1 https://github.com/opengrep/opengrep-rules /tmp/rules
-opengrep scan -f /tmp/rules/go --sarif --dataflow-traces --output findings.sarif
+# 1. Scan — anything emitting SARIF 2.1.0 works; semgrep needs no rules setup
+pipx install semgrep
+semgrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
 
 # 2a. Triage with a local model via Ollama…
 ollama serve &                        # http://localhost:11434
@@ -178,14 +169,19 @@ Estimates at Claude Sonnet pricing, `medium` effort — a typical finding takes 
 
 Only the first run costs real money — after that, the cache answers everything except new findings.
 
-## Flags & action inputs
+## Reference
+
+Everything below has a working default — the quick starts above set `model`, `api-key`, and nothing else.
+
+<details>
+<summary><b>All flags & action inputs</b></summary>
 
 The GitHub Action exposes every flag as an input of the same name, minus the leading dash — `-base-url` becomes `base-url:`, `-fail-on-new-exploitable` becomes `fail-on-new-exploitable:` — with identical defaults:
 
 | Flag                       | Default              | Purpose                                                                                           |
 | -------------------------- | -------------------- | ------------------------------------------------------------------------------------------------- |
-| `-provider`                | `openai`             | `openai` (any OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, OpenAI itself) or `anthropic` |
-| `-base-url`                | —                    | Endpoint for `openai`; **required, no default** — the tool only ever talks to the host you name   |
+| `-provider`                | inferred             | Only needed for `anthropic` (Claude's native API); `-base-url` alone implies `openai`             |
+| `-base-url`                | —                    | The endpoint. **No default** — the tool only ever talks to the host you name                      |
 | `-model`                   | —                    | **Required, no default** — e.g. `claude-sonnet-5` (anthropic), `qwen2.5-coder:7b` (openai)        |
 | `-sarif`                   | `findings.sarif`     | SARIF 2.1.0 input                                                                                 |
 | `-repo`                    | `.`                  | Repository root the findings refer to                                                             |
@@ -200,13 +196,24 @@ The GitHub Action exposes every flag as an input of the same name, minus the lea
 | `-github-repo`             | `$GITHUB_REPOSITORY` | `owner/name` for issue creation                                                                   |
 | `-link-base`               | —                    | E.g., `https://github.com/owner/repo/blob/<sha>`                                                  |
 
-**Effort presets** — `-effort` sets how much the agent may read and how long it may work on one finding; when the budget runs out, the verdict falls back to `uncertain`:
+The action also takes `api-key` (routed to whichever provider you selected), plus `anthropic-api-key` / `openai-api-key` if you'd rather be explicit.
+
+</details>
+
+<details>
+<summary><b>Effort presets</b> — reach for these when you get too many <code>uncertain</code> verdicts</summary>
+
+`-effort` sets how much the agent may read and how long it may work on one finding; when the budget runs out, the verdict falls back to `uncertain`. So a run that returns more `uncertain` than you'd like is usually a reason to go up a preset (and a weaker model is a reason to expect them regardless):
 
 | Effort   | read_file lines | grep matches | token budget | iterations |
 | -------- | --------------- | ------------ | ------------ | ---------- |
 | `small`  | 100             | 25           | 30k          | 6          |
 | `medium` | 200             | 50           | 60k          | 10         |
 | `large`  | 400             | 100          | 120k         | 15         |
+
+`-token-budget` and `-max-iterations` override the preset individually.
+
+</details>
 
 ## FAQ
 
@@ -277,16 +284,18 @@ Repo content enters the prompt as evidence, never as instructions. A `benign` ve
 </details>
 
 <details>
-<summary><strong>Does it only work with opengrep?</strong></summary>
+<summary><strong>Which scanners work?</strong></summary>
 
-No. It consumes SARIF 2.1.0 from any scanner. opengrep and semgrep are what's tested — their `matchBasedId` fingerprints and dataflow traces are used directly. Anything else that speaks SARIF (CodeQL, Snyk Code, gosec, Bandit, Brakeman, SonarQube, ...) works too: when a scanner emits no stable fingerprint, a synthetic one is derived from rule + location, and scanner quirks belong in `internal/sarif` adapters — a parsing problem, not a prompting problem.
+Any of them: it consumes SARIF 2.1.0, whoever produced it.
+
+opengrep and semgrep are the two that are tested — their `matchBasedId` fingerprints and dataflow traces are used directly, and this repo's own CI runs the same semgrep step the quick start shows. Anything else that speaks SARIF (CodeQL, Snyk Code, gosec, Bandit, Brakeman, SonarQube, ...) works too: when a scanner emits no stable fingerprint, a synthetic one is derived from rule + location, and scanner quirks belong in `internal/sarif` adapters — a parsing problem, not a prompting problem.
 
 </details>
 
 <details>
 <summary><strong>Which models can I use?</strong></summary>
 
-Any OpenAI-compatible endpoint out of the box (`-provider openai`, the default): Ollama, vLLM, LM Studio, or OpenAI itself — pick with `-base-url` and `-model`. Claude via `-provider anthropic`. Both are thin adapters over a one-method `Client` interface ([`internal/agent/client.go`](internal/agent/client.go)); a new provider is one file implementing `Complete`. The verdict logic is fail-closed, so a weaker local model produces more `uncertain` verdicts, never silent `benign` ones — and the cache records which model decided each verdict.
+Any OpenAI-compatible endpoint out of the box — Ollama, vLLM, LM Studio, DeepSeek, Kimi, OpenAI itself: name it with `-base-url` and `-model`, and that's the whole configuration. Claude via `-provider anthropic`, the one API that isn't OpenAI-shaped. Both are thin adapters over a one-method `Client` interface ([`internal/agent/client.go`](internal/agent/client.go)); a new provider is one file implementing `Complete`. The verdict logic is fail-closed, so a weaker local model produces more `uncertain` verdicts, never silent `benign` ones — and the cache records which model decided each verdict.
 
 Honest quality guidance: `claude-sonnet-5` is what this repo's CI uses and what produced the verdicts in [triage-cache.json](triage-cache.json). The tiny CPU model in the self-hosted quick-start (`qwen2.5-coder:1.5b`) proves the plumbing, not the judgment — expect mostly `uncertain` from it. Triaging locally for real means the biggest code model your hardware runs, and still budgeting for more `uncertain` verdicts than a frontier model leaves behind.
 

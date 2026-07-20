@@ -27,8 +27,8 @@ func main() {
 		repoRoot         = flag.String("repo", ".", "repository root the findings refer to")
 		reportPath       = flag.String("report", "triage-report.md", "markdown report output")
 		triagedSARIF     = flag.String("triaged-sarif", "", "write a verdict-annotated copy of the input SARIF here (benign findings carry suppressions) for Code Scanning upload; empty = skip")
-		provider         = flag.String("provider", "openai", "LLM provider: openai (any OpenAI-compatible endpoint — Ollama, vLLM, LM Studio, OpenAI) | anthropic")
-		baseURL          = flag.String("base-url", "", "OpenAI-compatible API base URL (required for provider=openai), e.g. http://localhost:11434/v1 for local Ollama. No default: the tool only ever talks to the endpoint you name")
+		provider         = flag.String("provider", "", "LLM API shape: anthropic for Claude's native API, openai for anything OpenAI-compatible. Empty (default) infers openai from -base-url")
+		baseURL          = flag.String("base-url", "", "API base URL, e.g. http://localhost:11434/v1 for local Ollama. Selects the OpenAI-compatible path on its own; with -provider anthropic it overrides Claude's endpoint. No default: the tool only ever talks to the endpoint you name")
 		model            = flag.String("model", "", "model name for the chosen provider — always required (e.g. claude-sonnet-5 for anthropic, qwen2.5-coder:7b for openai/Ollama)")
 		effort           = flag.String("effort", "medium", "triage depth per finding: small|medium|large (scales read/grep caps, token budget, iterations)")
 		maxIter          = flag.Int("max-iterations", 10, "agent loop iteration cap per finding (overrides -effort)")
@@ -79,28 +79,37 @@ func main() {
 		Log:              os.Stderr,
 	}
 
-	// Provider selection. openai is the default and requires an explicit
-	// -base-url — the tool never invents an endpoint, so it only talks to the
-	// host you name. anthropic is opt-in. A nil Client is fine: the pipeline
-	// only errors if a finding actually needs the LLM (cache-only runs don't).
-	switch *provider {
-	case "openai":
-		if cfg.Model == "" {
-			fmt.Fprintln(os.Stderr, "sast-triage: -provider openai requires -model (e.g. -model qwen2.5-coder:7b)")
+	// Provider selection. -base-url names the endpoint and, on its own, selects
+	// the OpenAI-compatible path; -provider anthropic opts into Claude's native
+	// API. Naming neither is a usage error rather than a default, because every
+	// default would be an endpoint the operator never asked for: the tool only
+	// talks to a host you named, or an API you asked for by name. A nil Client
+	// is fine — the pipeline only errors if a finding actually needs the LLM
+	// (cache-only runs don't).
+	if cfg.Model == "" {
+		fmt.Fprintln(os.Stderr, "sast-triage: -model is required (e.g. -model claude-sonnet-5, or -model qwen2.5-coder:7b for a local Ollama)")
+		os.Exit(2)
+	}
+	selected := *provider
+	if selected == "" {
+		if *baseURL == "" {
+			fmt.Fprintln(os.Stderr, "sast-triage: name an endpoint with -base-url (e.g. http://localhost:11434/v1 for local Ollama), or pick a native API with -provider anthropic")
 			os.Exit(2)
 		}
+		selected = "openai"
+	}
+	switch selected {
+	case "openai":
 		if *baseURL == "" {
 			fmt.Fprintln(os.Stderr, "sast-triage: -provider openai requires -base-url (e.g. http://localhost:11434/v1 for local Ollama)")
 			os.Exit(2)
 		}
 		cfg.Client = agent.NewOpenAIClient(*baseURL, os.Getenv("OPENAI_API_KEY"), *parallel)
 	case "anthropic":
-		if cfg.Model == "" {
-			fmt.Fprintln(os.Stderr, "sast-triage: -provider anthropic requires -model (e.g. -model claude-sonnet-5)")
-			os.Exit(2)
-		}
+		// baseURL passes through: empty means the SDK default, non-empty a
+		// gateway the operator named. Never silently discarded.
 		if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-			cfg.Client = agent.NewAnthropicClient(key)
+			cfg.Client = agent.NewAnthropicClient(key, *baseURL)
 		}
 	default:
 		fmt.Fprintf(os.Stderr, "sast-triage: unknown -provider %q (want openai or anthropic)\n", *provider)
