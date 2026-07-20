@@ -37,9 +37,30 @@ inputs:
   repo:
     description: Repository root the findings refer to
     default: "."
+  scope:
+    description: >-
+      What to triage: full (every finding in the SARIF) or diff (only findings in
+      files changed since base-ref). Set it from your trigger — pull_request wants
+      diff, schedule and workflow_dispatch want full. Never inferred.
+    default: full
+  base-ref:
+    description: "Base to diff against when scope is diff, e.g. origin/main. Needs fetch-depth: 0 on checkout"
+    default: ""
+  mode:
+    description: >-
+      Whether this run can fail the build: enforce (exit 3 on exploitable findings
+      in scope), report (advisory), or baseline (triage everything, gate nothing —
+      seeding a fresh cache).
+    default: enforce
+  cache-write:
+    description: >-
+      What to do with the updated cache: branch (commit to the branch being built —
+      use on PRs), pr (open/refresh one review PR — use when seeding), or none
+      (artifact only). Fork PRs cannot push, and fall back to none automatically.
+    default: none
   cache:
     description: Verdict cache file (commit it to git)
-    default: triage-cache.json
+    default: .sast-triage/cache.json
   report:
     description: Markdown report output (complete; no size cap)
     default: triage-report.md
@@ -52,8 +73,11 @@ inputs:
     description: Size cap for the digest; overflow is dropped by priority (benign first, exploitable last)
     default: "50000"
   triaged-sarif:
-    description: Write a verdict-annotated SARIF copy here for Code Scanning upload; empty = skip
-    default: ""
+    description: >-
+      Verdict-annotated copy of the input SARIF — benign findings gain a SARIF
+      suppression, nothing is ever deleted. Upload it to Code Scanning or feed it
+      to DefectDojo. On by default; empty = skip.
+    default: triaged.sarif
   effort:
     description: "Triage depth per finding: small | medium | large"
     default: medium
@@ -63,11 +87,13 @@ inputs:
   parallel:
     description: Findings triaged concurrently
     default: "4"
-  fail-on-new-exploitable:
-    description: Fail the step if this run decides any NEW exploitable finding (cache hits never trip it)
-    default: "true"
   create-issues:
     description: File GitHub issues for exploitable findings (needs an issues-writable token)
+    default: "false"
+  pr-comments:
+    description: >-
+      Post exploitable verdicts as inline comments on the PR diff (needs
+      pull-requests: write). Auto-detects the PR number on pull_request triggers.
     default: "false"
   github-repo:
     description: owner/name for issue creation; defaults to the current repository
@@ -114,7 +140,7 @@ runs:
       if: ${{ !startsWith(github.action_path, github.workspace) }}
       shell: bash
       env:
-        SAST_TRIAGE_VERSION: v1.2.0
+        SAST_TRIAGE_VERSION: v1.2.1
         SAST_TRIAGE_REPO: alexpermiakov/sast-triage
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
@@ -148,6 +174,7 @@ runs:
     # Inputs reach the shell only via env (never interpolated into the script),
     # so a hostile model/base-url string cannot inject commands.
     - name: Triage
+      id: triage
       shell: bash
       env:
         INPUT_PROVIDER: ${{ inputs.provider }}
@@ -158,6 +185,9 @@ runs:
         INPUT_OPENAI_API_KEY: ${{ inputs.openai-api-key }}
         INPUT_SARIF: ${{ inputs.sarif }}
         INPUT_REPO: ${{ inputs.repo }}
+        INPUT_SCOPE: ${{ inputs.scope }}
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
+        INPUT_MODE: ${{ inputs.mode }}
         INPUT_CACHE: ${{ inputs.cache }}
         INPUT_REPORT: ${{ inputs.report }}
         INPUT_DIGEST: ${{ inputs.digest }}
@@ -166,8 +196,10 @@ runs:
         INPUT_EFFORT: ${{ inputs.effort }}
         INPUT_MAX_FINDINGS_BUDGET: ${{ inputs.max-findings-budget }}
         INPUT_PARALLEL: ${{ inputs.parallel }}
-        INPUT_FAIL_ON_NEW_EXPLOITABLE: ${{ inputs.fail-on-new-exploitable }}
         INPUT_CREATE_ISSUES: ${{ inputs.create-issues }}
+        INPUT_PR_COMMENTS: ${{ inputs.pr-comments }}
+        INPUT_PR_NUMBER: ${{ github.event.pull_request.number }}
+        INPUT_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         INPUT_GITHUB_REPO: ${{ inputs.github-repo }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
         INPUT_LINK_BASE: ${{ inputs.link-base }}
@@ -177,16 +209,28 @@ runs:
           -model "$INPUT_MODEL"
           -sarif "$INPUT_SARIF" -repo "$INPUT_REPO"
           -cache "$INPUT_CACHE" -report "$INPUT_REPORT"
+          -scope "$INPUT_SCOPE" -mode "$INPUT_MODE"
           -effort "$INPUT_EFFORT"
           -max-findings-budget "$INPUT_MAX_FINDINGS_BUDGET"
           -parallel "$INPUT_PARALLEL"
-          -fail-on-new-exploitable="$INPUT_FAIL_ON_NEW_EXPLOITABLE"
         )
+        if [ -n "$INPUT_BASE_REF" ]; then args+=(-base-ref "$INPUT_BASE_REF"); fi
+        # Inline comments need a PR to comment on; outside a pull_request
+        # trigger there is none, so the flag is simply omitted rather than
+        # failing a run that asked for a surface this event does not have.
+        if [ "$INPUT_PR_COMMENTS" = "true" ] && [ -n "$INPUT_PR_NUMBER" ]; then
+          args+=(-pr "$INPUT_PR_NUMBER" -commit "$INPUT_COMMIT_SHA")
+        elif [ "$INPUT_PR_COMMENTS" = "true" ]; then
+          echo "::notice::pr-comments is on but this is not a pull_request event — no PR to comment on."
+        fi
         # Empty provider is passed as no flag at all, so the binary infers it
         # from base-url rather than being pinned to a default it never chose.
         if [ -n "$INPUT_PROVIDER" ]; then args+=(-provider "$INPUT_PROVIDER"); fi
         if [ -n "$INPUT_BASE_URL" ]; then args+=(-base-url "$INPUT_BASE_URL"); fi
-        if [ -n "$INPUT_TRIAGED_SARIF" ]; then args+=(-triaged-sarif "$INPUT_TRIAGED_SARIF"); fi
+        # Passed unconditionally, like -digest: both default to a real path in
+        # the binary, so an operator clearing the input must reach the binary as
+        # an explicit empty value, not as an omitted flag that re-enables it.
+        args+=(-triaged-sarif "$INPUT_TRIAGED_SARIF")
         args+=(-digest "$INPUT_DIGEST")
         if [ -n "$INPUT_DIGEST_BYTES" ]; then args+=(-digest-bytes "$INPUT_DIGEST_BYTES"); fi
         if [ -n "$INPUT_LINK_BASE" ]; then args+=(-link-base "$INPUT_LINK_BASE"); fi
@@ -208,5 +252,96 @@ runs:
         if [ -n "$INPUT_ANTHROPIC_API_KEY" ]; then export ANTHROPIC_API_KEY="$INPUT_ANTHROPIC_API_KEY"; fi
         if [ -n "$INPUT_OPENAI_API_KEY" ]; then export OPENAI_API_KEY="$INPUT_OPENAI_API_KEY"; fi
         export GITHUB_TOKEN="${GITHUB_TOKEN:-$INPUT_GITHUB_TOKEN}"
-        "$RUNNER_TEMP/sast-triage" "${args[@]}"
+
+        # Exit 3 (gate tripped) is recorded and re-raised at the end of the
+        # action, after the cache has been written out. Those verdicts were paid
+        # for; dropping them because the gate fired means paying again next run,
+        # and the cache delta showing a new exploitable is precisely what the
+        # reviewer needs to see. Real failures (1, 2) still stop here.
+        rc=0
+        "$RUNNER_TEMP/sast-triage" "${args[@]}" || rc=$?
+        echo "exit-code=$rc" >> "$GITHUB_OUTPUT"
+        if [ "$rc" != 0 ] && [ "$rc" != 3 ]; then exit "$rc"; fi
+
+    # Never bot-PR the cache onto a protected branch: on a PR run the delta is
+    # committed to the PR's own head branch, so it arrives on main through the
+    # normal merge everyone already reviews. `pr` exists for seeding only, where
+    # there is no branch of your own to commit to.
+    #
+    # Pushing with GITHUB_TOKEN is deliberate: pushes made with it do not
+    # retrigger workflows, so the cache commit cannot start the run that would
+    # write the next cache commit.
+    - name: Commit the cache delta
+      if: ${{ always() && inputs.cache-write != 'none' }}
+      shell: bash
+      env:
+        INPUT_CACHE: ${{ inputs.cache }}
+        INPUT_CACHE_WRITE: ${{ inputs.cache-write }}
+        INPUT_DIGEST: ${{ inputs.digest }}
+        HEAD_REF: ${{ github.head_ref }}
+        IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        # A fork PR's token is read-only. That is not an error and must not look
+        # like one: triage still ran, the gate still applies, and the cache
+        # rides out in the artifact instead.
+        if [ "$IS_FORK" = "true" ]; then
+          echo "::notice::fork PR — the token is read-only, so the cache delta stays in the artifact only. Triage and the gate are unaffected."
+          exit 0
+        fi
+        if [ ! -f "$INPUT_CACHE" ]; then
+          echo "no cache file at $INPUT_CACHE; nothing to commit"; exit 0
+        fi
+        if [ -z "$(git status --porcelain -- "$INPUT_CACHE")" ]; then
+          echo "cache unchanged; nothing to commit"; exit 0
+        fi
+
+        git config user.name "sast-triage-bot"
+        git config user.email "sast-triage-bot@users.noreply.github.com"
+        git add -- "$INPUT_CACHE"
+        MSG="chore(triage): verdict cache update $(date -u +%Y-%m-%dT%H:%MZ) [skip ci]"
+
+        if [ "$INPUT_CACHE_WRITE" = branch ]; then
+          if [ -z "$HEAD_REF" ]; then
+            echo "::warning::cache-write: branch outside a pull_request has no head branch to commit to; skipping."
+            exit 0
+          fi
+          git commit -m "$MSG"
+          git push origin "HEAD:refs/heads/$HEAD_REF"
+          echo "committed the cache delta to $HEAD_REF"
+          exit 0
+        fi
+
+        if [ "$INPUT_CACHE_WRITE" = pr ]; then
+          BRANCH="sast-triage/seed"
+          git checkout -B "$BRANCH"
+          git commit -m "$MSG"
+          git push -f origin "$BRANCH"
+          BODY=triage-body.md
+          if [ -n "$INPUT_DIGEST" ] && [ -f "$INPUT_DIGEST" ]; then BODY="$INPUT_DIGEST"; else
+            echo "Seeded verdict cache. Review the suppressions below before merging." > "$BODY"
+          fi
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
+            gh pr edit "$BRANCH" --body-file "$BODY"
+          elif ! gh pr create --head "$BRANCH" --title "seed sast-triage cache" --body-file "$BODY"; then
+            echo "::error::Enable Settings → Actions → General → 'Allow GitHub Actions to create and approve pull requests'."
+            exit 1
+          fi
+          exit 0
+        fi
+
+        echo "::error::unknown cache-write value '$INPUT_CACHE_WRITE' (want branch, pr or none)"
+        exit 1
+
+    # The gate, re-raised after every output has been written and the cache
+    # committed. A failing check with no report attached is a check people learn
+    # to ignore.
+    - name: Gate
+      if: ${{ always() && steps.triage.outputs.exit-code == '3' }}
+      shell: bash
+      run: |
+        echo "::error::sast-triage: exploitable findings in scope — see the triage report and the inline PR comments."
+        exit 1
 

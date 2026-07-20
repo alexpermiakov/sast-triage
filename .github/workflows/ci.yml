@@ -3,7 +3,12 @@ name: CI
 on:
   push:
     branches: [main]
+    # Cache commits carry [skip ci] too, but paths-ignore is the belt: a
+    # suppression-set change cannot break a Go build, so it must not spend a
+    # runner re-proving that.
+    paths-ignore: [".sast-triage/**"]
   pull_request:
+    paths-ignore: [".sast-triage/**"]
 
 permissions:
   contents: read

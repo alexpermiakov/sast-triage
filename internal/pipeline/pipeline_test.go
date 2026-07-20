@@ -69,7 +69,7 @@ func baseConfig(t *testing.T, dir string) Config {
 	t.Helper()
 	return Config{
 		SARIFPath:  fixtureSARIF,
-		CachePath:  filepath.Join(dir, "triage-cache.json"),
+		CachePath:  filepath.Join(dir, ".sast-triage", "cache.json"),
 		RepoRoot:   sampleRoot,
 		ReportPath: filepath.Join(dir, "triage-report.md"),
 		Model:      "test-model",
@@ -102,7 +102,13 @@ func TestRunFullThenIncremental(t *testing.T) {
 		t.Errorf("cache accounting = %+v", s)
 	}
 	if s.NewExploitable != 1 {
-		t.Errorf("NewExploitable = %d, want 1 (fresh exploitable verdicts trip the PR gate)", s.NewExploitable)
+		t.Errorf("NewExploitable = %d, want 1 (exploitable verdicts decided this run)", s.NewExploitable)
+	}
+	if s.Scanned != 3 {
+		t.Errorf("Scanned = %d, want 3 (full scope triages every finding in the SARIF)", s.Scanned)
+	}
+	if s.CacheSeeded {
+		t.Error("CacheSeeded on a first run against an empty cache")
 	}
 	if s.IssuesFiled != 1 || len(issues.titles) != 1 || !strings.Contains(issues.titles[0], "app/handlers.go:17") {
 		t.Errorf("issues = %+v, summary %+v", issues.titles, s)
@@ -177,7 +183,10 @@ func TestRunFullThenIncremental(t *testing.T) {
 		t.Errorf("incremental summary = %+v", s2)
 	}
 	if s2.NewExploitable != 0 {
-		t.Errorf("NewExploitable = %d on a cached run; cache hits must never trip the PR gate", s2.NewExploitable)
+		t.Errorf("NewExploitable = %d on a fully cached run; nothing was decided this run", s2.NewExploitable)
+	}
+	if !s2.CacheSeeded {
+		t.Error("CacheSeeded false on a run whose cache held every verdict")
 	}
 	if len(issues2.titles) != 0 {
 		t.Errorf("issue filed twice: %v", issues2.titles)

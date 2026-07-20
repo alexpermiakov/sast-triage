@@ -6,9 +6,11 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/alexpermiakov/sast-triage/internal/github"
 	"github.com/alexpermiakov/sast-triage/internal/report"
 	"github.com/alexpermiakov/sast-triage/internal/sarif"
+	"github.com/alexpermiakov/sast-triage/internal/scope"
 )
 
 // IssueCreator routes exploitable verdicts to an issue tracker. ListIssues
@@ -30,6 +33,13 @@ type IssueCreator interface {
 	ListIssues(ctx context.Context, label string) ([]github.Issue, error)
 }
 
+// ReviewCommenter posts verdicts inline on a pull request diff — the surface
+// people actually read, as opposed to a markdown file in an artifact.
+type ReviewCommenter interface {
+	CreateReviewComment(ctx context.Context, pr int, path string, line int, commitID, body string) error
+	ListReviewComments(ctx context.Context, pr int) ([]github.ReviewComment, error)
+}
+
 type Config struct {
 	SARIFPath        string
 	CachePath        string
@@ -38,6 +48,13 @@ type Config struct {
 	DigestPath       string // byte-bounded report for size-capped surfaces; empty → skip
 	DigestBytes      int    // digest size cap; 0 → report.DefaultDigestBytes
 	TriagedSARIFPath string // verdict-annotated copy of the input SARIF; empty → skip
+
+	// Scope is what gets triaged, decided by the caller from the trigger
+	// event: scope.Full (everything in the SARIF) or scope.Diff (only
+	// findings in files changed since BaseRef). Never inferred from cache
+	// state. Empty → Full.
+	Scope   string
+	BaseRef string // required for scope.Diff, e.g. "origin/main"
 
 	Model          string
 	MaxIterations  int
@@ -51,10 +68,14 @@ type Config struct {
 	IssueLabel       string
 	IssueTitlePrefix string // prepended to filed issue titles (e.g. "<TEST> ")
 
-	Client agent.Client // nil is allowed when every finding is cached/short-circuit
-	Issues IssueCreator // nil → skip issue routing
-	Now    func() time.Time
-	Log    io.Writer
+	PRNumber  int    // pull request to comment on; 0 → skip inline comments
+	CommitSHA string // head SHA the comments anchor to; required with PRNumber
+
+	Client  agent.Client    // nil is allowed when every finding is cached/short-circuit
+	Issues  IssueCreator    // nil → skip issue routing
+	Reviews ReviewCommenter // nil → skip inline PR comments
+	Now     func() time.Time
+	Log     io.Writer
 }
 
 type Summary struct {
@@ -63,6 +84,15 @@ type Summary struct {
 	NewExploitable                        int // exploitable verdicts decided this run (not cache hits)
 	TokensUsed                            int
 	IssuesFiled                           int
+	CommentsPosted                        int
+
+	// Scoped is how many findings the SARIF held before diff scoping dropped
+	// the ones outside the change; equal to Total on a full-scope run.
+	Scanned int
+	// CacheSeeded reports whether the cache held any entry when the run
+	// started. It informs the caller's "this repo has never been seeded"
+	// message; it must never change what gets triaged or how.
+	CacheSeeded bool
 }
 
 type outcome struct {
@@ -92,10 +122,26 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	scanned := len(findings)
+
+	// Scope, before the cache is even consulted: triaging a finding outside
+	// the change is wasted money on a PR run, and the gate must not fire on
+	// code the change never touched.
+	if cfg.Scope == scope.Diff {
+		changed, err := scope.ChangedFiles(ctx, cfg.RepoRoot, cfg.BaseRef)
+		if err != nil {
+			return Summary{}, err
+		}
+		findings = scope.Filter(findings, changed)
+		fmt.Fprintf(cfg.Log, "diff scope vs %s: %d changed file(s), %d of %d findings in scope\n",
+			cfg.BaseRef, len(changed), len(findings), scanned)
+	}
+
 	c, err := cache.Load(cfg.CachePath)
 	if err != nil {
 		return Summary{}, err
 	}
+	seeded := len(c.Entries) > 0
 
 	var items []report.Item
 	var llmQueue []sarif.Finding
@@ -175,9 +221,14 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	}
 
 	summary := summarize(items)
+	summary.Scanned = scanned
+	summary.CacheSeeded = seeded
 
 	if cfg.Issues != nil {
 		summary.IssuesFiled = fileIssues(ctx, cfg, c, items)
+	}
+	if cfg.Reviews != nil && cfg.PRNumber > 0 {
+		summary.CommentsPosted = postReviewComments(ctx, cfg, items)
 	}
 
 	if err := c.Save(cfg.CachePath); err != nil {
@@ -313,6 +364,56 @@ func fileIssues(ctx context.Context, cfg Config, c *cache.Cache, items []report.
 		items[i].IssueRef = n
 	}
 	return filed
+}
+
+// postReviewComments puts exploitable verdicts inline on the PR diff, at the
+// flagged line, with the reason and cited evidence. This is the surface a
+// reviewer actually reads; the markdown report is the archive.
+//
+// Exploitable only, deliberately. The gate's whole claim is that it does not
+// fire on noise, and a bot that also comments on every uncertain finding spends
+// that credibility immediately — uncertain findings stay in the report and the
+// digest. Dedupe is on the fingerprint marker already present in the body, so
+// a re-run on the same PR adds nothing. Every failure degrades to a log line:
+// commenting must never fail a run or, worse, mask the gate.
+func postReviewComments(ctx context.Context, cfg Config, items []report.Item) int {
+	if cfg.CommitSHA == "" {
+		fmt.Fprintf(cfg.Log, "inline PR comments skipped: no commit SHA to anchor them to\n")
+		return 0
+	}
+	existing, err := cfg.Reviews.ListReviewComments(ctx, cfg.PRNumber)
+	if err != nil {
+		// Same reasoning as issue filing: commenting blind risks the duplicate
+		// storm the listing prevents.
+		fmt.Fprintf(cfg.Log, "failed to list PR review comments: %v — inline comments skipped this run\n", err)
+		return 0
+	}
+
+	posted := 0
+	for _, it := range items {
+		if it.Verdict != agent.VerdictExploitable {
+			continue
+		}
+		marker := report.FingerprintMarker(it.Fingerprint)
+		if slices.ContainsFunc(existing, func(rc github.ReviewComment) bool {
+			return strings.Contains(rc.Body, marker)
+		}) {
+			continue
+		}
+		body := report.ReviewCommentBody(it, report.Options{LinkBase: cfg.LinkBase})
+		err := cfg.Reviews.CreateReviewComment(ctx, cfg.PRNumber, it.File, it.StartLine, cfg.CommitSHA, body)
+		switch {
+		case err == nil:
+			posted++
+		case errors.Is(err, github.ErrLineNotInDiff):
+			// Routine: the finding is in a changed file but an unchanged hunk.
+			// It is still in the report, the digest, and the gate.
+			fmt.Fprintf(cfg.Log, "no inline comment for %s: line is outside the PR diff\n", it.Location())
+		default:
+			fmt.Fprintf(cfg.Log, "failed to comment on %s: %v\n", it.Location(), err)
+		}
+	}
+	return posted
 }
 
 // adoptIssue finds the oldest existing issue for a finding: an exact

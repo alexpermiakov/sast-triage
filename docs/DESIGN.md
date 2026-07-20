@@ -17,14 +17,31 @@ involved.
 ## Shape
 
 ```
-findings.sarif ─► INGEST ─► CACHE ─► TRIAGE (agent) ─► REPORT + CACHE PR + ISSUES
-                  parse     skip      bounded LLM       exit code
-                  SARIF     known     loop, one per
-                            verdicts  new finding
+findings.sarif ─► INGEST ─► SCOPE ─► CACHE ─► TRIAGE (agent) ─► OUTPUTS ─► GATE
+                  parse     diff or   skip     bounded LLM       report,    mode
+                  SARIF     full      known    loop, one per     SARIF,     decides
+                                      verdicts new finding       comments   exit code
 ```
 
 Deterministic pipeline; exactly one nondeterministic stage (triage),
 quarantined in `internal/agent`. The LLM gets judgment, never control.
+
+**Scope and gating are two independent axes, both explicit.** Scope
+(`-scope diff|full`, `internal/scope`) decides WHAT is triaged; mode
+(`-mode enforce|report|baseline`, `internal/pipeline/mode.go`) decides whether
+the result can fail the build. Neither is derived from the other, and neither is
+derived from cache presence — implicit behaviour is behaviour nobody can debug
+at 2am. The caller maps its trigger onto the pair: `pull_request` → diff +
+enforce, `schedule`/`push` → full + report, `workflow_dispatch` → full +
+baseline.
+
+Diff scope has a known, unfixable hole: a change in `Foo.java` can make a
+pre-existing finding in `Bar.java` exploitable, and nothing keyed on changed
+files can see it. This is why the full-scope scheduled run is part of the
+design rather than an optional extra — the two runs are a pair. Semgrep's
+baseline mode has the same hole. Scope matches on the FLAGGED location only,
+never on taint-trace hops: matching hops would pull most of a backlog into scope
+whenever a shared helper changes.
 
 Deliberately out of scope (future candidates): `find_callers` tool via gopls,
 per-scanner ingest adapters, confidence field, MCP interface, org-wide shared
@@ -50,7 +67,11 @@ cache backend.
 
 ### 2. Cache (`internal/cache`)
 
-- File: `triage-cache.json` at repo root, committed to git. Schema:
+- File: `.sast-triage/cache.json`, committed to git. The directory, not a
+  root-level file: it leaves room for config and ignore files beside it, gives
+  one clean `CODEOWNERS` line (`/.sast-triage/ @org/security`) so suppression
+  changes route to a security reviewer, and one clean `paths-ignore:` entry so
+  cache commits do not retrigger CI. Schema:
 
 ```json
 {
@@ -75,6 +96,14 @@ cache backend.
 - Hit = fingerprint present AND codeHash matches current code. codeHash covers
   flagged region + every evidence region (a verdict is a fact about the code it
   read, not about the finding).
+- **Cache-safety invariant: a missing, damaged, or unverifiable entry causes
+  re-triage, never `benign`.** The cache is a hand-editable file in git, so
+  `Lookup` re-checks the evidence bar at the trust boundary rather than assuming
+  whatever wrote the file was the agent: `benign` with an empty evidence list is
+  a miss, an unmodeled verdict string is a miss, an absent or mismatched
+  codeHash is a miss, an unreadable evidence region is a miss. A wiped cache
+  costs one full run's tokens and nothing else. Pinned by
+  `TestDamagedEntryNeverSuppresses` in `internal/cache/safety_test.go`.
 - One file, mixed models. Entries record the deciding `model`, but the cache is
   not partitioned by it (no per-model files/directories): the same finding would
   then appear in N files, fragmenting the PR diff that *is* the audit trail, and
@@ -192,41 +221,86 @@ returns exit code. No hidden state.
   fingerprint marker in the body, else by deterministic title; if the listing
   fails, filing is skipped for the run rather than risking duplicates. PRs
   approve suppressions; issues own vulnerabilities.
-- With `-triaged-sarif <path>`: a verdict-annotated copy of the input SARIF —
-  every triaged result gains a `properties.triage` bag (verdict, reason,
-  evidence); benign results also gain a SARIF suppression (kind `external`,
-  status `accepted`, justification = reason). Pure transform in
-  `internal/sarif`: unmatched results and unmodeled fields round-trip
-  unchanged.
-- Exit codes: 0 success; 1 pipeline failure; 2 usage error; 3 when this run
-  _decides_ a finding exploitable. The gate is on by default (the tool's
-  headline behavior; forgetting a flag must not silently disable gating);
-  runs that may not fail — push-to-main jobs, report-only runs — opt out
-  with `-fail-on-new-exploitable=false`. Cache hits never trip the
-  gate: the committed cache is the baseline, so pre-existing backlog cannot
-  block a PR — only what the PR introduces.
+- `-triaged-sarif` (`triaged.sarif`, ON by default): a verdict-annotated copy of
+  the input SARIF — every triaged result gains a `properties.triage` bag
+  (verdict, reason, evidence); benign results also gain a SARIF suppression
+  (kind `external`, status `accepted`, justification = reason). Findings are
+  RELABELLED, never deleted, so the file stays a complete record of the scan.
+  On by default because it is free on every repo and it is the integration
+  surface for anything downstream (DefectDojo, Code Scanning); uploading it to
+  the Security tab stays an explicit extra step, since private repos need GHAS.
+  Pure transform in `internal/sarif`: unmatched results and unmodeled fields
+  round-trip unchanged.
+- With `-pr <n> -commit <sha>`: exploitable verdicts are posted as inline
+  review comments on the PR diff — verdict, reason, cited evidence, on the
+  flagged line. This is the product's primary UX; the markdown report is the
+  archive. Exploitable ONLY: commenting on uncertain findings too would spend
+  the gate's "does not fire on noise" credibility immediately. Dedupe is on the
+  fingerprint marker in the comment body (not the cache — a comment belongs to
+  one PR, the cache outlives every PR). A line outside the diff is a routine
+  skip, not a failure, and every comment failure degrades to a log line:
+  commenting must never fail a run or mask the gate.
+- Exit codes: 0 success; 1 pipeline failure; 2 usage error; 3 gate tripped.
+  The gate is `-mode enforce` + at least one `exploitable` finding in scope,
+  and `enforce` is the default (forgetting a flag must not silently disable
+  gating). Two decisions:
+  - **Exploitable only.** Gating on `uncertain` would fire on every budget
+    exhaustion and every ambiguity. A gate that fires on noise is a gate that
+    gets disabled within a week, and then nothing is gated.
+  - **Cached exploitables count.** The rejected alternative — gate only on
+    verdicts decided this run — makes the exit code a function of cache state,
+    so the same code passes or fails depending on whether a cache update merged
+    first, and a wiped cache reclassifies the entire backlog as "new". Scope,
+    not cache freshness, is what keeps the backlog from blocking a PR: a
+    diff-scoped run only ever sees findings in files the change touched.
+  - One exception, and it only ever RELAXES the gate: on a repo whose cache is
+    empty, `enforce` reports instead of failing and says to seed first. There is
+    no reviewed baseline to enforce against, and a wall of failures on a repo
+    that has never been seeded teaches people the tool is broken. It is stated
+    on stderr rather than passing silently.
 
-## CI (`.github/workflows/triage.yml`)
+## CI (`.github/workflows/triage-{pr,seed}.yml`)
 
 The repo dogfoods itself: scan + triage of this codebase (excluding
-`testdata/`) on push and PR to main, plus `workflow_dispatch`.
+`testdata/`). THREE workflow files, one per trigger, rather than one file with
+conditionals on `github.event_name`. Each one's scope, gating, permissions and
+cache destination are then readable top to bottom without cross-referencing the
+other two — the conditionals were where the surprising behaviour hid.
 
 - Triage runs a local model (default: a tiny Ollama model in a service
   container) — no API key, nothing leaves the runner. Cheap on GitHub-hosted
   runners; swap the model or point at a hosted provider to trade cost for
   quality. A tiny model produces more `uncertain` verdicts (never silent
   `benign`), so the gate stays conservative.
-- PR jobs: read-only permissions; triage against the cache committed on main;
-  gate via exit 3. No secret is involved, so fork PRs are triaged too (they no
-  longer skip).
-- Push-to-main jobs: file one issue per exploitable (this workflow passes the
-  opt-in `-create-issues`); when the cache changed, refresh ONE review PR
-  (branch `triage/main`) carrying the cache delta with the report as its body.
-- Push-to-main jobs also upload the triaged SARIF to Code Scanning (category
-  `sast-triage`) so the Security tab reflects post-triage truth. GitHub
-  ignores the SARIF `suppressions` property on upload, so benign alerts are
-  then dismissed via the API (`advanced-security/dismiss-alerts`, SHA-pinned).
-  PR jobs stay read-only and do not upload.
+- `triage-pr.yml` (`pull_request`): `scope: diff` + `mode: enforce` +
+  `cache-write: branch` + inline comments. Checks out the PR HEAD SHA (not the
+  merge commit) so the cache commit fast-forwards the head branch, with
+  `fetch-depth: 0` for the base ref.
+- A scheduled full-scope run (`scope: full` + `mode: report` +
+  `cache-write: none`, filing issues and uploading the triaged SARIF to Code
+  Scanning) is what closes diff scope's cross-file hole, and the README
+  documents it as step 3 of the recommended setup. **It is currently not
+  dogfooded in this repo** — there is no scheduled workflow here, so this
+  codebase is covered by PR-scoped triage only. Adding one back is the fix if
+  that gap matters; until then the docs describe a practice the repo does not
+  follow, which is worth knowing before citing it as evidence.
+- `triage-seed.yml` (`workflow_dispatch`): `scope: full` + `mode: baseline` +
+  `cache-write: pr`. See Bootstrap below.
+- **The cache is never bot-PR'd onto a protected branch.** PR runs commit the
+  delta to the PR's own head branch, so it reaches main through the merge a
+  human was already reviewing; `cache-write: pr` exists only for seeding, where
+  there is no branch of one's own. Pushes use `GITHUB_TOKEN` deliberately —
+  pushes made with it do not retrigger workflows, so a cache commit cannot start
+  the run that writes the next cache commit.
+- Fork PRs get a read-only token and no secrets. Both degrade rather than
+  crash: no API key → triage skipped with a notice (a contributor cannot fix a
+  missing secret, and a red X they cannot act on trains everyone to ignore the
+  check); read-only token → the cache delta ships in the artifact instead, with
+  triage and the gate unaffected.
+- The gate is re-raised at the END of the composite action, after outputs are
+  written and the cache is committed. Exit 3 is captured, not propagated
+  immediately: those verdicts were paid for, and a failing check with no report
+  attached is a check people learn to ignore.
 - Supply chain: actions pinned by SHA, opengrep binary pinned by sha256, rules
   repo pinned by commit. The rules checkout is excluded from the scan and
   deleted before triage (rule corpora carry intentionally vulnerable
@@ -237,13 +311,24 @@ The repo dogfoods itself: scan + triage of this codebase (excluding
   secret in CI at all (local model), so nothing to leak to fork context;
   default-deny `permissions:` with per-job elevation.
 
-## Bootstrap (first run)
+## Bootstrap (seeding)
 
-`workflow_dispatch` on main → one large review PR converting the untriaged
-backlog into evidence-backed verdicts. Review non-benign closely, spot-check
-benign, merge once. Everything after is incremental — cache hits dominate and
-LLM cost drops ~99%. A scanner or ruleset change that shifts fingerprints
-re-runs bootstrap.
+Seeding is a deliberate one-off a maintainer triggers, not something that
+happens implicitly on whichever run reaches an empty cache first.
+`workflow_dispatch` → `scope: full` + `mode: baseline` + `cache-write: pr` →
+ONE pull request titled "seed sast-triage cache", converting the untriaged
+backlog into evidence-backed verdicts.
+
+**That PR is the security review, and it is the most valuable artifact this tool
+produces**: the entire proposed suppression set, each entry carrying its
+reasoning and the `file:line` evidence behind it, reviewed once by a human who
+can accept, edit, or delete any of it. Review non-benign closely, spot-check
+benign, merge once. Everything after is incremental — a feature PR adds 0–3
+cache lines and stays invisible; cache hits dominate and LLM cost drops ~99%.
+
+A scanner or ruleset change that shifts fingerprints wholesale means re-seeding.
+A PR that arrives at an unseeded repo does not seed it as a side effect: it runs
+advisory-only, does not gate, and says to seed first.
 
 ## Testing
 
@@ -264,3 +349,8 @@ re-runs bootstrap.
 - "I didn't make the model reliable; I made the system safe under an
   unreliable model."
 - "PRs approve suppressions; issues own vulnerabilities."
+- "Scope and gating are separate explicit inputs; nothing is inferred from
+  cache state."
+- "The gate people don't disable, because it doesn't fire on noise."
+- "A wiped cache costs money, never safety."
+- "The cache arrives on main through your merge, never a bot's PR."

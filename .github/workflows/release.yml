@@ -3,7 +3,8 @@ name: Release
 # Cross-compiles the binaries that action.yml downloads. Fires on version tags;
 # the tagged commit must already carry the matching SAST_TRIAGE_VERSION in
 # action.yml (see the comment there) or consumers of that tag will fetch assets
-# from a different release than the action code they pinned.
+# from a different release than the action code they pinned. That is enforced
+# below rather than remembered — see "Verify action.yml pins this release".
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -21,6 +22,34 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # The one failure this repo cannot detect at runtime: action.yml downloads
+      # the release named by SAST_TRIAGE_VERSION, so if the tagged commit still
+      # carries the PREVIOUS version, `uses: ...@v1.2.1` silently runs the
+      # v1.2.0 binary. The flags moved between those, so it dies with "flag
+      # provided but not defined" in every consumer's CI at once.
+      #
+      # Failing the release is the cheap end of that: the tag exists, no assets
+      # are published under it, and the fix is one line plus a re-tag. Bumping
+      # the constant is still manual; forgetting it is no longer shippable.
+      - name: Verify action.yml pins this release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          PINNED=$(sed -n 's/^[[:space:]]*SAST_TRIAGE_VERSION:[[:space:]]*//p' action.yml | head -1)
+          if [ -z "$PINNED" ]; then
+            echo "::error file=action.yml::SAST_TRIAGE_VERSION not found — has the download step been renamed or removed?"
+            exit 1
+          fi
+          if [ "$PINNED" != "$TAG" ]; then
+            echo "::error file=action.yml::action.yml pins SAST_TRIAGE_VERSION: $PINNED but this release is $TAG."
+            echo "::error::Consumers of $TAG would download the $PINNED binary. Set it to $TAG, commit, and move the tag onto that commit."
+            exit 1
+          fi
+          echo "action.yml pins $PINNED, matching the tag being released"
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: stable

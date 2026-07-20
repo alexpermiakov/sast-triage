@@ -1,0 +1,4 @@
+# The verdict cache is the suppression set. A diff to it is a proposal to stop
+# flagging something, so it routes to whoever owns that call — which is the
+# whole reason the cache lives in its own directory.
+/.sast-triage/ @alexpermiakov

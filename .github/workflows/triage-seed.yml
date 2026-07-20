@@ -1,0 +1,87 @@
+# Seeding: a deliberate one-off a maintainer runs by hand. It triages the whole
+# backlog and opens ONE pull request titled "seed sast-triage cache".
+#
+# That PR is the point of this workflow. It is where a human reviews the entire
+# proposed suppression set at once, with cited evidence per verdict, and either
+# accepts it or edits it. Everything after is incremental: feature PRs add a
+# handful of cache lines and nobody has to think about them again.
+#
+# Re-run it after anything that shifts fingerprints wholesale — a scanner
+# upgrade, a ruleset change, a large refactor.
+name: Triage (seed)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Model to triage with, e.g. DeepSeek-V4-Pro or claude-sonnet-5"
+        type: string
+        required: true
+        default: DeepSeek-V4-Pro
+      base_url:
+        description: "OpenAI-compatible endpoint — clear it to use Claude's native API instead"
+        type: string
+        required: false
+        default: https://api.deepseek.com/v1
+
+concurrency:
+  group: triage-seed
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the seed branch
+  pull-requests: write # open the seed PR
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve provider
+        id: llm
+        env:
+          INPUT_BASE_URL: ${{ inputs.base_url }}
+        run: |
+          # base-url alone selects the OpenAI-compatible path; empty means
+          # Claude's native API. Same inference the binary does, so neither is
+          # a default nobody chose.
+          if [ -n "$INPUT_BASE_URL" ]; then PROVIDER=openai; else PROVIDER=anthropic; fi
+          echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
+          echo "seeding with ${{ inputs.model }} via $PROVIDER"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Scan
+        run: |
+          pipx install semgrep
+          semgrep scan --config=auto --dataflow-traces \
+            --exclude testdata --sarif-output=findings.sarif
+
+      # mode: baseline — triage everything, gate nothing. A seeding run that
+      # fails on the backlog it was invoked to catalogue is useless.
+      - name: Triage
+        uses: ./
+        with:
+          provider: ${{ steps.llm.outputs.provider }}
+          model: ${{ inputs.model }}
+          base-url: ${{ inputs.base_url }}
+          openai-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          scope: full
+          mode: baseline
+          cache-write: pr
+          link-base: https://github.com/${{ github.repository }}/blob/${{ github.sha }}
+
+      - name: Publish digest to run summary
+        if: always()
+        run: '[ -f triage-digest.md ] && cat triage-digest.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: triage-seed-${{ github.run_id }}
+          path: |
+            findings.sarif
+            triaged.sarif
+            triage-report.md
+            triage-digest.md
+          retention-days: 7
