@@ -1,1 +1,46 @@
-
+{
+  "version": 1,
+  "entries": {
+    "synthetic:0fbbae0429f6dd5bd67ce72d371093a45f540f2bccce1cbb1d0d44f471fa4ac9": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "benign",
+      "reason": "The flagged `.github/dependabot.yml` is a static configuration file committed to the repository. No external attacker-controlled input reaches or modifies this file at runtime; it is only changed via normal repository commits subject to code review and access controls. The absence of a `cooldown` block is a configuration-choice recommendation, not an exploitable code defect where untrusted input flows to a dangerous sink. There are no other files that reference or programmatically alter this configuration.",
+      "evidence": [
+        ".github/dependabot.yml:1-20"
+      ],
+      "codeHash": "sha256:2ea0b0014530d41babdd4b1ecaa0847f654cdac19dd063cf9263f94f9d3b49bf",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-21T10:14:06Z",
+      "tokensUsed": 12971
+    },
+    "synthetic:4d37171025e51f08cf8758203b01fc40473041647fe3ed6e9e8767c9b90b40f1": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "benign",
+      "reason": "The import of math/rand/v2 on line 9 is used only at line 215 in backoff(), where rand.Int64N adds jitter to exponential backoff between HTTP retries. The comment on lines 206–208 explains the purpose: avoiding thundering-herd lockstep when parallel workers hit a rate limit. The random value becomes a time.Duration sleep; it never serves as a token, key, nonce, session identifier, or any other security-sensitive secret. CWE-338 (weak PRNG in security context) does not apply because the usage is purely a performance/robustness concern. The identity of the decision is explicit in the function's purpose and the resulting value's sole use as a sleep interval.",
+      "evidence": [
+        "internal/agent/openai.go:9",
+        "internal/agent/openai.go:206-215",
+        "internal/agent/openai.go:165"
+      ],
+      "codeHash": "sha256:98697c86004f203bdf6e0055e209897a213b5ecc7b9cbff8698d3dadfb71d856",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-21T10:14:10Z",
+      "tokensUsed": 51703
+    },
+    "synthetic:a46b9fb36f28a5d90c3d72434c68c61d0d6f5bad48fc80961b2cee05656d809d": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "benign",
+      "reason": "The flagged dependabot.yml is a static configuration file for GitHub's external Dependabot service; no application code in this repository reads or processes it at runtime, and no attacker-controlled input can reach it. There is no exploitable code path.",
+      "evidence": [
+        ".github/dependabot.yml:1-20"
+      ],
+      "codeHash": "sha256:9b2225721ee61a50d5b33a9ca46e506df9c43d32749c3d3930973466a3697875",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-21T10:14:01Z",
+      "tokensUsed": 6803
+    }
+  }
+}
