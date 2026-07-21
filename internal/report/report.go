@@ -272,6 +272,22 @@ func writeDigestFooter(b *strings.Builder, omitted map[string]int) {
 	b.WriteString("_The complete report is `triage-report.md` in this run's artifacts._\n")
 }
 
+// RenderSummary renders the run's accounting and nothing else: the same
+// headline the report and the digest lead with, with no per-finding detail
+// behind it.
+//
+// It exists for surfaces where the findings are already reviewable somewhere
+// better, and where restating them is actively worse than a count. The seed
+// pull request is the case: its body sits directly above a cache diff carrying
+// every verdict with its reason and cited evidence, so a digest there
+// duplicates thousands of stanzas into the one place nobody can review them —
+// and on a real backlog it hits the 65,536-character body cap while doing it.
+func RenderSummary(items []Item) string {
+	var b strings.Builder
+	writeHeadline(&b, items)
+	return b.String()
+}
+
 // IssueTitle names the GitHub issue for an exploitable finding.
 func IssueTitle(it Item) string {
 	return fmt.Sprintf("[sast-triage] %s at %s", shortRule(it.RuleID), it.Location())

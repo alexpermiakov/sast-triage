@@ -47,6 +47,7 @@ type Config struct {
 	ReportPath       string
 	DigestPath       string // byte-bounded report for size-capped surfaces; empty → skip
 	DigestBytes      int    // digest size cap; 0 → report.DefaultDigestBytes
+	SummaryPath      string // headline only, for surfaces that want a count and a link; empty → skip
 	TriagedSARIFPath string // verdict-annotated copy of the input SARIF; empty → skip
 
 	// Scope is what gets triaged, decided by the caller from the trigger
@@ -244,6 +245,11 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		digest := report.RenderDigest(items, opts, cfg.DigestBytes)
 		if err := os.WriteFile(cfg.DigestPath, []byte(digest), 0o644); err != nil {
 			return summary, fmt.Errorf("write digest: %w", err)
+		}
+	}
+	if cfg.SummaryPath != "" {
+		if err := os.WriteFile(cfg.SummaryPath, []byte(report.RenderSummary(items)), 0o644); err != nil {
+			return summary, fmt.Errorf("write summary: %w", err)
 		}
 	}
 	if cfg.TriagedSARIFPath != "" {

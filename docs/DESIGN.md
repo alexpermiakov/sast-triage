@@ -248,6 +248,15 @@ returns exit code. No hidden state.
   worst-case footer are reserved before any finding is written. Rendering this
   belongs in the binary; making each consumer parse the report's markdown to fit
   their surface is the failure this replaces.
+- `triage-summary.md` (`-summary`, on by default): the headline alone — counts,
+  no findings. It is the seed PR body. That body sits directly above a
+  `cache.json` diff carrying every verdict with its reason and cited evidence,
+  in the one place a reviewer can actually edit a verdict; a digest there
+  restates thousands of stanzas where nobody can act on them, and on a real
+  backlog blows the 65,536-character body cap while doing it. The body links out
+  to the run summary (digest) and artifacts (full report) instead. Counts come
+  from the same `writeHeadline` all three renderings share, so the PR and the
+  report can never disagree about what the run found.
 - Cache delta: ALL verdict classes are written (exploitable verdicts are also
   memory — otherwise re-triaged forever).
 - With `-create-issues` (off by default — most teams track vulnerabilities

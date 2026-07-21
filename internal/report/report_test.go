@@ -174,6 +174,28 @@ func TestRenderDigestTinyCapKeepsHeadline(t *testing.T) {
 	}
 }
 
+// The summary is a count and nothing else. Its whole reason to exist is that
+// the seed PR body must not restate findings the cache diff below it already
+// carries, so a stanza leaking in here is the bug.
+func TestRenderSummaryIsCountsOnly(t *testing.T) {
+	out := RenderSummary(sampleItems())
+
+	if !strings.Contains(out, "5 findings — **2 benign**") {
+		t.Errorf("summary must carry the same accounting as the report:\n%s", out)
+	}
+	if !strings.Contains(out, "**1 deferred**") {
+		t.Errorf("deferred must stay broken out from uncertain:\n%s", out)
+	}
+	for _, unwanted := range []string{"##", "app/handlers.go", "unsanitized", "Evidence"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("summary must carry no per-finding detail, found %q:\n%s", unwanted, out)
+		}
+	}
+	if n := strings.Count(strings.TrimSpace(out), "\n"); n != 0 {
+		t.Errorf("summary must be one line, has %d newlines:\n%s", n+1, out)
+	}
+}
+
 func TestIssueBody(t *testing.T) {
 	it := sampleItems()[0]
 	title := IssueTitle(it)

@@ -72,6 +72,12 @@ inputs:
   digest-bytes:
     description: Size cap for the digest; overflow is dropped by priority (benign first, exploitable last)
     default: "50000"
+  summary:
+    description: >-
+      One-line accounting of the run (counts only, no findings). Used as the seed
+      PR body, which sits above a cache diff that already carries every verdict.
+      Empty = skip.
+    default: triage-summary.md
   triaged-sarif:
     description: >-
       Verdict-annotated copy of the input SARIF — benign findings gain a SARIF
@@ -192,6 +198,7 @@ runs:
         INPUT_REPORT: ${{ inputs.report }}
         INPUT_DIGEST: ${{ inputs.digest }}
         INPUT_DIGEST_BYTES: ${{ inputs.digest-bytes }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
         INPUT_TRIAGED_SARIF: ${{ inputs.triaged-sarif }}
         INPUT_EFFORT: ${{ inputs.effort }}
         INPUT_MAX_FINDINGS_BUDGET: ${{ inputs.max-findings-budget }}
@@ -227,11 +234,12 @@ runs:
         # from base-url rather than being pinned to a default it never chose.
         if [ -n "$INPUT_PROVIDER" ]; then args+=(-provider "$INPUT_PROVIDER"); fi
         if [ -n "$INPUT_BASE_URL" ]; then args+=(-base-url "$INPUT_BASE_URL"); fi
-        # Passed unconditionally, like -digest: both default to a real path in
-        # the binary, so an operator clearing the input must reach the binary as
-        # an explicit empty value, not as an omitted flag that re-enables it.
+        # Passed unconditionally, like -digest: all three default to a real path
+        # in the binary, so an operator clearing the input must reach the binary
+        # as an explicit empty value, not as an omitted flag that re-enables it.
         args+=(-triaged-sarif "$INPUT_TRIAGED_SARIF")
         args+=(-digest "$INPUT_DIGEST")
+        args+=(-summary "$INPUT_SUMMARY")
         if [ -n "$INPUT_DIGEST_BYTES" ]; then args+=(-digest-bytes "$INPUT_DIGEST_BYTES"); fi
         if [ -n "$INPUT_LINK_BASE" ]; then args+=(-link-base "$INPUT_LINK_BASE"); fi
         if [ -n "$INPUT_GITHUB_REPO" ]; then args+=(-github-repo "$INPUT_GITHUB_REPO"); fi
@@ -277,7 +285,8 @@ runs:
       env:
         INPUT_CACHE: ${{ inputs.cache }}
         INPUT_CACHE_WRITE: ${{ inputs.cache-write }}
-        INPUT_DIGEST: ${{ inputs.digest }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         HEAD_REF: ${{ github.head_ref }}
         IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
         GH_TOKEN: ${{ inputs.github-token }}
@@ -319,10 +328,21 @@ runs:
           git checkout -B "$BRANCH"
           git commit -m "$MSG"
           git push -f origin "$BRANCH"
+          # Counts and links, never the findings. The review surface for this PR
+          # is the cache diff below the body — every verdict with its reason and
+          # cited evidence, in the one place editing a verdict is possible. A
+          # digest here restates all of that where nobody can act on it, and on a
+          # real backlog blows the 65,536-character body cap doing so.
           BODY=triage-body.md
-          if [ -n "$INPUT_DIGEST" ] && [ -f "$INPUT_DIGEST" ]; then BODY="$INPUT_DIGEST"; else
-            echo "Seeded verdict cache. Review the suppressions below before merging." > "$BODY"
-          fi
+          {
+            echo "Seeded verdict cache."
+            echo
+            if [ -n "$INPUT_SUMMARY" ] && [ -f "$INPUT_SUMMARY" ]; then cat "$INPUT_SUMMARY"; fi
+            echo
+            echo "Review the proposed suppressions in the \`$INPUT_CACHE\` diff below — each entry carries the verdict, its reason, and the evidence cited for it. Edit or drop any entry before merging."
+            echo
+            echo "Full detail: the digest on the [run summary]($RUN_URL), and \`triage-report.md\` in that run's artifacts."
+          } > "$BODY"
           if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
             gh pr edit "$BRANCH" --body-file "$BODY"
           elif ! gh pr create --head "$BRANCH" --title "seed sast-triage cache" --body-file "$BODY"; then

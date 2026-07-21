@@ -514,6 +514,48 @@ func TestRunSkipsDigestWhenUnset(t *testing.T) {
 	}
 }
 
+// The seed PR body is this file. It must exist when asked for and must stay a
+// count: the findings belong in the cache diff that PR is opened to review.
+func TestRunWritesCountsOnlySummary(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseConfig(t, dir)
+	cfg.SummaryPath = filepath.Join(dir, "triage-summary.md")
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "exploitable", "reason": "id flows unsanitized to QueryRow", "evidence": ["app/handlers.go:16"]}`),
+		textResp(`{"verdict": "benign", "reason": "sample credential in demo code", "evidence": ["app/config.go:7"]}`),
+	}}
+
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := os.ReadFile(cfg.SummaryPath)
+	if err != nil {
+		t.Fatalf("summary not written: %v", err)
+	}
+	if !strings.Contains(string(summary), "**1 exploitable**") {
+		t.Errorf("summary must carry the accounting:\n%s", summary)
+	}
+	if strings.Contains(string(summary), "unsanitized") {
+		t.Errorf("summary must carry no per-finding detail:\n%s", summary)
+	}
+}
+
+func TestRunSkipsSummaryWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseConfig(t, dir)
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "uncertain", "reason": "no conclusion"}`),
+		textResp(`{"verdict": "uncertain", "reason": "no conclusion"}`),
+	}}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "triage-summary.md")); !os.IsNotExist(err) {
+		t.Error("no SummaryPath configured, yet a summary was written")
+	}
+}
+
 func TestRunTransportErrorNotCached(t *testing.T) {
 	dir := t.TempDir()
 	cfg := baseConfig(t, dir)
