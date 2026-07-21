@@ -51,9 +51,9 @@ jobs:
 
       # Your scanner goes here — Semgrep, CodeQL, Opengrep, Snyk Code, anything emitting SARIF 2.1.0
       - name: Scan → findings.sarif
-        run: |
-          pipx install opengrep
-          opengrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
+        run: |1
+          pipx install semgrep
+          semgrep scan --sarif-output=findings.sarif
 
       - name: Triage
         uses: alexpermiakov/sast-triage@v1
@@ -61,6 +61,7 @@ jobs:
           provider: anthropic
           model: claude-sonnet-5
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          sarif: findings.sarif # the file the scan step wrote
           scope: full
           mode: baseline # triage everything, never fail the build
           cache-write: pr # one PR titled "seed sast-triage cache"
@@ -91,8 +92,8 @@ jobs:
       # Your scanner goes here — Semgrep, CodeQL, Opengrep, Snyk Code, anything emitting SARIF 2.1.0
       - name: Scan → findings.sarif
         run: |
-          pipx install opengrep
-          opengrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
+          pipx install semgrep
+          semgrep scan --sarif-output=findings.sarif
 
       - name: Triage
         uses: alexpermiakov/sast-triage@v1
@@ -100,6 +101,7 @@ jobs:
           provider: anthropic
           model: claude-sonnet-5
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          sarif: findings.sarif # the file the scan step wrote
           scope: diff # only findings in files this PR changed
           base-ref: origin/${{ github.base_ref }}
           mode: enforce # fail the check on exploitable findings
@@ -130,7 +132,7 @@ jobs:
       - name: Scan → findings.sarif
         run: |
           pipx install semgrep
-          semgrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
+          semgrep scan --sarif-output=findings.sarif
 
       - name: Triage
         uses: alexpermiakov/sast-triage@v1
@@ -186,7 +188,7 @@ jobs:
       - name: Scan → findings.sarif
         run: |
           pipx install semgrep
-          semgrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
+          semgrep scan --sarif-output=findings.sarif
 
       - name: Triage
         uses: alexpermiakov/sast-triage@v1
@@ -212,7 +214,7 @@ go install github.com/alexpermiakov/sast-triage/cmd/sast-triage@latest
 
 # 1. Scan — anything emitting SARIF 2.1.0 works; semgrep needs no rules setup
 pipx install semgrep
-semgrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
+semgrep scan --sarif-output=findings.sarif
 
 # 2a. Triage with a local model via Ollama…
 ollama serve &                        # http://localhost:11434
@@ -412,7 +414,7 @@ You pay for one full run again, and nothing else. A missing, wiped, or hand-mang
 
 Any of them: it consumes SARIF 2.1.0, whoever produced it.
 
-opengrep and semgrep are the two that are tested — their `matchBasedId` fingerprints and dataflow traces are used directly, and this repo's own CI runs the same semgrep step the quick start shows. Anything else that speaks SARIF (CodeQL, Snyk Code, gosec, Bandit, Brakeman, SonarQube, ...) works too: when a scanner emits no stable fingerprint, a synthetic one is derived from rule + location, and scanner quirks belong in `internal/sarif` adapters — a parsing problem, not a prompting problem.
+opengrep and semgrep are the two that are tested, and they do not hand you the same thing. opengrep emits real `matchBasedId/v1` fingerprints and `codeFlows` taint traces — the trace reaches the agent as numbered hops to verify, so its budget goes on checking a flow rather than finding one. Semgrep run without a platform login emits the literal `"requires login"` for every fingerprint, and semgrep 1.170.0 emits no `codeFlows` even with `--dataflow-traces` (documented since v0.120.0, so treat this as a bug that may come back rather than a permanent limit). Those findings fall back to a synthetic id — rule + location + snippet — and the agent starts from the flagged line alone. Both are safe: a synthetic id is still unique per run, and thin evidence resolves to `uncertain`, never `benign`. The semgrep path just spends more tokens per finding and returns more `uncertain`. This repo's own CI runs the semgrep step the quick start shows. Anything else that speaks SARIF (CodeQL, Snyk Code, gosec, Bandit, Brakeman, SonarQube, ...) works too: scanner quirks belong in `internal/sarif` adapters — a parsing problem, not a prompting problem.
 
 </details>
 
