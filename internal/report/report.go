@@ -326,6 +326,11 @@ const summaryMaxRows = 15
 // is a suppression to approve or veto, and mixing them by severity alone means
 // the reader sorts them apart by hand. Deferred findings get no row — they
 // carry no verdict — and are counted in the headline instead.
+//
+// Columns run verdict, severity, why, rule, location — left to right in the
+// order a reviewer consumes them. The verdict is the claim being made and the
+// reason is the argument for it, so both sit ahead of the rule ID and the
+// line, which only matter once the reader has decided to go look.
 func RenderSummary(items []Item, opts Options) string {
 	rows := append(append(filter(items, "exploitable"), filter(items, "benign")...), filter(items, "uncertain")...)
 
@@ -339,12 +344,12 @@ func RenderSummary(items []Item, opts Options) string {
 
 	if len(rows) > 0 {
 		shown, collapsed := splitRows(rows)
-		b.WriteString("\n| severity | verdict | rule | location | why |\n")
+		b.WriteString("\n| verdict | severity | why | rule | location |\n")
 		b.WriteString("| --- | --- | --- | --- | --- |\n")
 		for _, it := range shown {
-			fmt.Fprintf(&b, "| %s | %s | `%s` | %s | %s |\n",
-				severityBucket(it.Severity), verdictCell(it.Verdict),
-				compactRule(it.RuleID), link(it.Location(), opts), cell(it.Reason))
+			fmt.Fprintf(&b, "| %s | %s | %s | `%s` | %s |\n",
+				verdictCell(it.Verdict), severityBucket(it.Severity),
+				cell(it.Reason), compactRule(it.RuleID), link(it.Location(), opts))
 		}
 		if len(collapsed) > 0 {
 			fmt.Fprintf(&b, "\n+%d %s — see the report.\n", len(collapsed), bucketList(collapsed))
@@ -362,17 +367,16 @@ func RenderSummary(items []Item, opts Options) string {
 // through three layers to fix that is not worth it.
 const cacheFileName = ".sast-triage/cache.json"
 
-// writeSummaryFooter attributes each column to whoever produced it. Severity is
-// the scanner's number, not a judgement this tool made, and the verdict is one
-// specific model's — a reader weighing a wall of suppressions is entitled to
-// know which, without digging into the workflow file.
+// writeSummaryFooter attributes each column to whoever produced it, in column
+// order. The verdict is one specific model's — a reader weighing a wall of
+// suppressions is entitled to know which, without digging into the workflow
+// file — and severity is the scanner's number, not a judgement this tool made.
 func writeSummaryFooter(b *strings.Builder, opts Options) {
-	parts := []string{"severity: your scanner"}
 	verdict := "verdict: sast-triage"
 	if opts.Model != "" {
 		verdict += " (" + opts.Model + ")"
 	}
-	parts = append(parts, verdict)
+	parts := []string{verdict, "severity: your scanner"}
 	if opts.RunURL != "" {
 		parts = append(parts, fmt.Sprintf("[run summary](%s)", opts.RunURL))
 		parts = append(parts, fmt.Sprintf("[`triage-report.md`](%s#artifacts)", opts.RunURL))
@@ -485,8 +489,12 @@ func compactRule(ruleID string) string {
 }
 
 // maxCellRunes bounds the why column. Reasons are model prose with no length
-// contract; one long one turns every row into a paragraph.
-const maxCellRunes = 72
+// contract, so something has to cap them — but the why is the column a reviewer
+// actually reads, and 72 runes cut most reasons mid-sentence, before the clause
+// naming the sink or the reason it is unreachable. At summaryMaxRows rows this
+// costs a few thousand characters against a 65,536-character body cap, which is
+// not the binding constraint; readability is.
+const maxCellRunes = 240
 
 // cell makes arbitrary text safe and short enough for a markdown table cell: a
 // literal pipe would end the column early and a newline would end the row.
