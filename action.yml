@@ -32,12 +32,8 @@ inputs:
     description: "Provider-specific alternative to api-key, for hosted OpenAI-compatible endpoints. Wins over api-key when both are set"
     default: ""
   sarif-file:
-    description: "SARIF 2.1.0 input produced by your scanner (default: findings.sarif)"
-    default: ""
-  sarif:
-    description: Deprecated alias for sarif-file; removed in v2
-    deprecationMessage: "The 'sarif' input is deprecated, rename it to 'sarif-file'."
-    default: ""
+    description: SARIF 2.1.0 input produced by your scanner
+    default: findings.sarif
   repo:
     description: Repository root the findings refer to
     default: "."
@@ -194,7 +190,6 @@ runs:
         INPUT_ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         INPUT_OPENAI_API_KEY: ${{ inputs.openai-api-key }}
         INPUT_SARIF_FILE: ${{ inputs.sarif-file }}
-        INPUT_SARIF: ${{ inputs.sarif }}
         INPUT_REPO: ${{ inputs.repo }}
         INPUT_SCOPE: ${{ inputs.scope }}
         INPUT_BASE_REF: ${{ inputs.base-ref }}
@@ -218,19 +213,9 @@ runs:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         INPUT_EXTRA_ARGS: ${{ inputs.extra-args }}
       run: |
-        sarif_file="$INPUT_SARIF_FILE"
-        if [ -n "$INPUT_SARIF" ]; then
-          echo "::warning::sast-triage: input 'sarif' is deprecated, rename it to 'sarif-file' (removed in v2)."
-          if [ -n "$sarif_file" ]; then
-            echo "::warning::sast-triage: both 'sarif' and 'sarif-file' are set — using 'sarif-file'."
-          else
-            sarif_file="$INPUT_SARIF"
-          fi
-        fi
-        if [ -z "$sarif_file" ]; then sarif_file="findings.sarif"; fi
         args=(
           -model "$INPUT_MODEL"
-          -sarif-file "$sarif_file" -repo "$INPUT_REPO"
+          -sarif-file "$INPUT_SARIF_FILE" -repo "$INPUT_REPO"
           -cache "$INPUT_CACHE" -report "$INPUT_REPORT"
           -scope "$INPUT_SCOPE" -mode "$INPUT_MODE"
           -effort "$INPUT_EFFORT"
