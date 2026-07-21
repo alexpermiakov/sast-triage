@@ -19,8 +19,43 @@ func TestLoadMissingFile(t *testing.T) {
 	}
 }
 
+// An empty file is the file existing with nothing in it — `touch` to bootstrap
+// the path, a checkout of a branch without it, an artifact restored empty. It
+// holds as many verdicts as no file at all, so it loads as one rather than
+// stranding the run on a file whose only fix is deleting it.
+func TestLoadEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"empty.json":      "",
+		"whitespace.json": "\n  \t\n",
+	} {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		c, err := Load(path)
+		if err != nil {
+			t.Fatalf("%s must load as an empty cache, not fail: %v", name, err)
+		}
+		if c.Version != Version || len(c.Entries) != 0 {
+			t.Fatalf("%s: want empty v%d cache, got %+v", name, Version, c)
+		}
+		// The recovery has to survive the round trip: Save must write a file
+		// the next run reads back, not a version-0 one that fails its check.
+		if err := c.Save(path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err != nil {
+			t.Fatalf("%s: cache saved after empty-file recovery does not reload: %v", name, err)
+		}
+	}
+}
+
 func TestLoadErrors(t *testing.T) {
 	dir := t.TempDir()
+	// Malformed but non-empty stays an error: those bytes are a cache someone
+	// wrote, possibly truncated with real verdicts in it. Reading it as empty
+	// would re-triage the backlog while hiding the corruption behind the bill.
 	bad := filepath.Join(dir, "bad.json")
 	os.WriteFile(bad, []byte("{"), 0o644)
 	if _, err := Load(bad); err == nil {

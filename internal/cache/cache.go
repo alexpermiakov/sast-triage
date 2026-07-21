@@ -4,6 +4,7 @@
 package cache
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -86,15 +87,35 @@ func (r Region) Ref() string {
 	return fmt.Sprintf("%s:%d", r.File, r.Start)
 }
 
+// newEmpty is the cache a run starts from when the file holds no verdicts. It
+// carries the current Version so the first Save writes a file this binary can
+// read back, rather than a version-0 one that fails the next run's check.
+func newEmpty() *Cache {
+	return &Cache{Version: Version, Entries: map[string]Entry{}}
+}
+
 // Load reads the cache file. A missing file yields an empty cache — first run
-// is not an error.
+// is not an error — and so does an empty one: zero bytes carry exactly as many
+// verdicts as no file at all, and every routine way to reach this state is
+// benign plumbing rather than damage (`touch` to bootstrap the path, a
+// checkout of a branch where the file is absent, an artifact restored empty).
+// Failing there strands the run on a file whose only fix is deleting it.
+//
+// Malformed non-empty JSON stays a hard error. Those bytes are a cache someone
+// wrote — plausibly a truncated one with real verdicts in it — and treating it
+// as empty would re-triage the whole backlog while hiding the corruption that
+// caused it. Neither path can ever yield a verdict, which is the invariant that
+// matters: a damaged cache costs money, never safety.
 func Load(path string) (*Cache, error) {
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		return &Cache{Version: Version, Entries: map[string]Entry{}}, nil
+		return newEmpty(), nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("read cache: %w", err)
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return newEmpty(), nil
 	}
 	var c Cache
 	if err := json.Unmarshal(data, &c); err != nil {
