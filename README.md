@@ -61,8 +61,8 @@ jobs:
           provider: anthropic
           model: claude-sonnet-5
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          sarif: findings.sarif # the file the scan step wrote
-          scope: full
+          sarif-file: findings.sarif # the file the scan step wrote
+          scope: full # every finding in the SARIF, not just changed files
           mode: baseline # triage everything, never fail the build
           cache-write: pr # one PR titled "seed sast-triage cache"
 ```
@@ -101,7 +101,7 @@ jobs:
           provider: anthropic
           model: claude-sonnet-5
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          sarif: findings.sarif # the file the scan step wrote
+          sarif-file: findings.sarif # the file the scan step wrote
           scope: diff # only findings in files this PR changed
           base-ref: origin/${{ github.base_ref }}
           mode: enforce # fail the check on exploitable findings
@@ -109,7 +109,7 @@ jobs:
           pr-comments: "true" # verdicts inline on the diff
 ```
 
-After seeding, this is nearly invisible: a typical feature PR triages a handful of findings, adds a couple of cache lines, and passes. When it does fail, the reason is an inline comment on the offending line, not a log you have to go dig up.
+After seeding, this is nearly invisible: a typical feature PR triages a handful of findings, adds a couple of cache lines, and passes.
 
 </details>
 
@@ -140,12 +140,13 @@ jobs:
           provider: anthropic
           model: claude-sonnet-5
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
-          scope: full
+          sarif-file: findings.sarif # the file the scan step wrote
+          scope: full # every finding in the SARIF, not just changed files
           mode: report # never fails the build
           cache-write: none # artifact only, no commit
 ```
 
-What this buys you: diff scope has a structural hole — a change in `Foo.java` can make a _pre-existing_ finding in `Bar.java` exploitable, and nothing keyed on changed files will ever see it. (Semgrep's baseline mode has the same hole.) A periodic full-repo run is what closes it. Mostly cache hits after seeding, so it is cheap to leave on.
+What this buys you: diff scope has a structural hole — a change in `Foo.java` can make a _pre-existing_ finding in `Bar.java` exploitable, and nothing keyed on changed files will ever see it. (Semgrep's baseline mode has the same hole.) A periodic full-repo run is what closes it: `scope: full` re-asks every finding against today's code, so a verdict reached before `Foo.java` changed gets revisited whether or not the finding's own file was touched. After seeding, almost all of that is cache hits — an entry is only re-triaged when its flagged region or one of its cited evidence regions has drifted — so the nightly `cron: "0 3 * * *"` above costs a handful of model calls, not a full re-scan. With `mode: report` and `cache-write: none` it cannot fail a build or push a commit either; it just files the report.
 
 </details>
 
@@ -219,12 +220,12 @@ semgrep scan --sarif-output=findings.sarif
 # 2a. Triage with a local model via Ollama…
 ollama serve &                        # http://localhost:11434
 ollama pull qwen2.5-coder:7b
-sast-triage -sarif findings.sarif -repo . \
+sast-triage -sarif-file findings.sarif -repo . \
   -base-url http://localhost:11434/v1 -model qwen2.5-coder:7b
 
 # 2b. …or with Claude (needs ANTHROPIC_API_KEY in your environment)
 export ANTHROPIC_API_KEY=sk-ant-...
-sast-triage -sarif findings.sarif -repo . \
+sast-triage -sarif-file findings.sarif -repo . \
   -provider anthropic -model claude-sonnet-5
 
 cat triage-report.md
@@ -280,7 +281,7 @@ The GitHub Action exposes every flag as an input of the same name, minus the lea
 | `-scope`               | `full`                    | `full` (everything in the SARIF) or `diff` (only findings in changed files)                |
 | `-base-ref`            | —                         | Base to diff against for `-scope diff`, e.g. `origin/main`. Required with it               |
 | `-mode`                | `enforce`                 | `enforce` (exit 3 on exploitables in scope), `report` (advisory), `baseline` (seeding)     |
-| `-sarif`               | `findings.sarif`          | SARIF 2.1.0 input                                                                          |
+| `-sarif-file`          | `findings.sarif`          | SARIF 2.1.0 input                                                                          |
 | `-repo`                | `.`                       | Repository root the findings refer to                                                      |
 | `-cache`               | `.sast-triage/cache.json` | Verdict cache (commit it to git)                                                           |
 | `-report`              | `triage-report.md`        | Markdown report output — complete, uncapped                                                |
