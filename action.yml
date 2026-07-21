@@ -218,10 +218,6 @@ runs:
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         INPUT_EXTRA_ARGS: ${{ inputs.extra-args }}
       run: |
-        # sarif was renamed to sarif-file. Both default to empty here so an
-        # unset input is distinguishable from a chosen one; the effective
-        # findings.sarif default is applied below. Silently ignoring the old
-        # name would triage the default path on a run that still goes green.
         sarif_file="$INPUT_SARIF_FILE"
         if [ -n "$INPUT_SARIF" ]; then
           echo "::warning::sast-triage: input 'sarif' is deprecated, rename it to 'sarif-file' (removed in v2)."
