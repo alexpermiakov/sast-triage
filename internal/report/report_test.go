@@ -13,7 +13,7 @@ func sampleItems() []Item {
 			Message: "String-formatted SQL query.", Verdict: "exploitable",
 			Reason:   "id flows unsanitized from query param to QueryRow",
 			Evidence: []string{"app/handlers.go:16", "app/handlers.go:17-18"},
-			IssueRef: 42, TokensUsed: 1200,
+			IssueRef: 42, TokensIn: 1100, TokensOut: 100,
 		},
 		{
 			Fingerprint: "fp-benign", RuleID: "go.lang.security.sqli.string-formatted-query",
@@ -31,7 +31,7 @@ func sampleItems() []Item {
 			Fingerprint: "fp-unc", RuleID: "go.lang.security.audit.xss",
 			File: "app/render.go", StartLine: 3, EndLine: 3, Severity: 5.0, Level: "warning",
 			Verdict: "uncertain", Reason: "template escaping could not be traced to a sink",
-			TokensUsed: 800,
+			TokensIn: 700, TokensOut: 100,
 		},
 		{
 			Fingerprint: "fp-deferred", RuleID: "go.lang.security.audit.path-traversal",
@@ -53,16 +53,16 @@ func TestRenderSectionOrder(t *testing.T) {
 	if !(benignAt < exploitAt && exploitAt < uncertainAt) {
 		t.Error("sections must be ordered benign, exploitable, uncertain (scrutiny order)")
 	}
-	if !strings.Contains(out, "5 findings — **2 benign**") {
+	if !strings.Contains(out, "5 findings — **1 exploitable** · **2 benign**") {
 		t.Errorf("summary line wrong:\n%s", strings.SplitN(out, "\n", 4)[2])
 	}
-	if !strings.Contains(out, "1 from cache, 4 newly triaged (2000 tokens)") {
+	if !strings.Contains(out, "1 from cache · 4 newly triaged · 1k in / 200 out tokens") {
 		t.Errorf("cache/token accounting wrong:\n%s", out)
 	}
 	// Deferred is broken out of uncertain: it is an absent verdict, not one the
 	// model failed to reach, and conflating them misreports a budget shortfall
 	// as analytical uncertainty.
-	if !strings.Contains(out, "**1 uncertain**, **1 deferred** (not triaged)") {
+	if !strings.Contains(out, "**1 uncertain** · **1 deferred** (not triaged)") {
 		t.Errorf("deferred must not be counted as uncertain:\n%s", out)
 	}
 	if !strings.Contains(out, "Issue: #42") {
@@ -174,25 +174,106 @@ func TestRenderDigestTinyCapKeepsHeadline(t *testing.T) {
 	}
 }
 
-// The summary is a count and nothing else. Its whole reason to exist is that
-// the seed PR body must not restate findings the cache diff below it already
-// carries, so a stanza leaking in here is the bug.
-func TestRenderSummaryIsCountsOnly(t *testing.T) {
-	out := RenderSummary(sampleItems())
+func TestRenderSummary(t *testing.T) {
+	out := RenderSummary(sampleItems(), Options{
+		Model:    "deepseek-v4-flash",
+		RunURL:   "https://github.com/o/r/actions/runs/1",
+		RunLabel: "seed",
+		LinkBase: "https://github.com/o/r/blob/abc",
+	})
 
-	if !strings.Contains(out, "5 findings — **2 benign**") {
-		t.Errorf("summary must carry the same accounting as the report:\n%s", out)
-	}
-	if !strings.Contains(out, "**1 deferred**") {
-		t.Errorf("deferred must stay broken out from uncertain:\n%s", out)
-	}
-	for _, unwanted := range []string{"##", "app/handlers.go", "unsanitized", "Evidence"} {
-		if strings.Contains(out, unwanted) {
-			t.Errorf("summary must carry no per-finding detail, found %q:\n%s", unwanted, out)
+	for _, want := range []string{
+		"### sast-triage · seed",
+		"5 findings — **1 exploitable**",
+		"| severity | verdict | rule | location | why |",
+		"| high | ❌ exploitable | `security.sqli.string-formatted-query` |",
+		"| high | ✅ benign |",
+		"| medium | ⚠️ uncertain |",
+		"[app/handlers.go:17](https://github.com/o/r/blob/abc/app/handlers.go#L17)",
+		"verdict: sast-triage (deepseek-v4-flash)",
+		"[run summary](https://github.com/o/r/actions/runs/1)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary missing %q:\n%s", want, out)
 		}
 	}
-	if n := strings.Count(strings.TrimSpace(out), "\n"); n != 0 {
-		t.Errorf("summary must be one line, has %d newlines:\n%s", n+1, out)
+	// Class beats severity: the 8.6 uncertain-free ordering puts every benign
+	// row above the uncertain one even though one uncertain outranks nothing.
+	if strings.Index(out, "❌ exploitable") > strings.Index(out, "✅ benign") {
+		t.Error("exploitable rows must lead the table")
+	}
+	if strings.Index(out, "✅ benign") > strings.Index(out, "⚠️ uncertain") {
+		t.Error("benign rows must precede uncertain ones")
+	}
+	// Deferred findings carry no verdict, so they get no row — only the
+	// headline count. A row for one would invite a reviewer to act on it.
+	if strings.Contains(out, "app/files.go") {
+		t.Errorf("deferred finding must not get a table row:\n%s", out)
+	}
+	// Evidence lists and reasons in full belong in the report and the cache
+	// diff; the body would be unbounded with them.
+	if strings.Contains(out, "app/handlers.go:16") {
+		t.Errorf("summary must not carry evidence lists:\n%s", out)
+	}
+}
+
+// The bound is the whole design: a body that grows with the backlog is the
+// thing this replaced. Past the cap, rows collapse into a count that names
+// which severities went unlisted.
+func TestRenderSummaryBoundsRows(t *testing.T) {
+	items := sampleItems()
+	for i := range 200 {
+		items = append(items, Item{
+			Fingerprint: "fp-bulk", RuleID: "go.lang.security.audit.bulk",
+			File: "app/bulk.go", StartLine: i, EndLine: i, Severity: 4.0, Level: "warning",
+			Verdict: "benign", Reason: "constant argument", Evidence: []string{"app/bulk.go:1"},
+		})
+	}
+
+	out := RenderSummary(items, Options{})
+
+	if rows := strings.Count(out, "\n| ") - 2; rows > summaryMaxRows { // less header + separator
+		t.Errorf("table has %d rows, over the %d cap:\n%s", rows, summaryMaxRows, out)
+	}
+	// Over the cap, severity filters: the 200 medium bulk findings and the one
+	// medium uncertain collapse, the three critical/high rows stay.
+	if !strings.Contains(out, "+201 medium — see the report.") {
+		t.Errorf("collapsed rows must be counted and their severities named:\n%s", out)
+	}
+	if strings.Contains(out, "app/bulk.go") {
+		t.Errorf("medium rows must collapse once over the cap:\n%s", out)
+	}
+	// The exploitable finding sorts first, so no cap can drop it.
+	if !strings.Contains(out, "❌ exploitable") {
+		t.Errorf("exploitable row was collapsed away:\n%s", out)
+	}
+	if len(out) > 4000 {
+		t.Errorf("summary grew to %d bytes on a 205-finding run; it must stay a summary", len(out))
+	}
+}
+
+// Table cells are model prose: a stray pipe silently eats a column, and an
+// unbounded reason turns every row into a paragraph.
+func TestSummaryCellsAreSafeAndBounded(t *testing.T) {
+	items := []Item{{
+		Fingerprint: "fp", RuleID: "r", File: "a.go", StartLine: 1, EndLine: 1,
+		Severity: 9.5, Level: "error", Verdict: "exploitable",
+		Reason: "pipe | inside\nand a newline, then " + strings.Repeat("very long prose ", 20),
+	}}
+
+	out := RenderSummary(items, Options{})
+
+	if !strings.Contains(out, `pipe \| inside`) {
+		t.Errorf("pipe in a reason must be escaped, or it ends the column early:\n%s", out)
+	}
+	if strings.Count(out, "\n| ") != 3 { // header, separator, one row
+		t.Errorf("newline in a reason broke the row apart:\n%s", out)
+	}
+	if !strings.Contains(out, "…") {
+		t.Errorf("over-long reason must be truncated:\n%s", out)
+	}
+	if !strings.Contains(out, "critical") {
+		t.Errorf("severity 9.5 must bucket as critical:\n%s", out)
 	}
 }
 

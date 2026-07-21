@@ -23,8 +23,21 @@ type Verdict struct {
 	Reason   string   `json:"reason"`
 	Evidence []string `json:"evidence"`
 
-	TokensUsed   int  `json:"-"`
-	ShortCircuit bool `json:"-"` // decided by pure rule, no LLM call
+	Tokens       Tokens `json:"-"`
+	ShortCircuit bool   `json:"-"` // decided by pure rule, no LLM call
+}
+
+// Tokens is the LLM spend behind one verdict, kept split rather than summed.
+// Input and output are priced separately by every provider, and the two move
+// for different reasons — input tracks how much code the loop read, output
+// tracks how much the model wrote. A single total hides which one to tune.
+type Tokens struct{ In, Out int }
+
+func (t Tokens) Total() int { return t.In + t.Out }
+
+func (t *Tokens) add(r *Response) {
+	t.In += r.InputTokens
+	t.Out += r.OutputTokens
 }
 
 // Config bounds the loop. Zero values fall back to the listed defaults.
@@ -86,7 +99,7 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 	}
 
 	msgs := []Message{{Role: "user", Content: []Block{{Type: "text", Text: prompt}}}}
-	tokens := 0
+	var tokens Tokens
 	retried := false
 
 	for i := 0; i < maxIter; i++ {
@@ -100,7 +113,7 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 		if err != nil {
 			return Verdict{}, fmt.Errorf("triage finding %s: %w", f.Fingerprint, err)
 		}
-		tokens += resp.InputTokens + resp.OutputTokens
+		tokens.add(resp)
 
 		if calls := toolCalls(resp); len(calls) > 0 {
 			msgs = append(msgs, Message{Role: "assistant", Content: resp.Content})
@@ -118,7 +131,7 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 			text := responseText(resp)
 			v, perr := parseVerdict(text)
 			if perr == nil {
-				v.TokensUsed = tokens
+				v.Tokens = tokens
 				return t.validate(v, f), nil
 			}
 			if retried {
@@ -136,8 +149,8 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 		// re-sends the whole conversation, so it costs at least this call's
 		// input again plus up to MaxTokensPerCall of output — stop before
 		// issuing a call that would blow the budget, not after.
-		if tokens+resp.InputTokens+t.cfg.MaxTokensPerCall > t.cfg.TokenBudget {
-			return t.uncertain(f, tokens, fmt.Sprintf("token budget exhausted (%d of %d tokens used; the next call would exceed the budget)", tokens, t.cfg.TokenBudget)), nil
+		if tokens.Total()+resp.InputTokens+t.cfg.MaxTokensPerCall > t.cfg.TokenBudget {
+			return t.uncertain(f, tokens, fmt.Sprintf("token budget exhausted (%d of %d tokens used; the next call would exceed the budget)", tokens.Total(), t.cfg.TokenBudget)), nil
 		}
 	}
 
@@ -195,7 +208,7 @@ func (t *Triager) validate(v Verdict, f sarif.Finding) Verdict {
 	switch v.Verdict {
 	case VerdictBenign, VerdictExploitable, VerdictUncertain:
 	default:
-		return t.uncertain(f, v.TokensUsed, fmt.Sprintf("model returned unknown verdict %q", v.Verdict))
+		return t.uncertain(f, v.Tokens, fmt.Sprintf("model returned unknown verdict %q", v.Verdict))
 	}
 
 	var valid, invalid []string
@@ -209,10 +222,10 @@ func (t *Triager) validate(v Verdict, f sarif.Finding) Verdict {
 
 	if v.Verdict == VerdictBenign {
 		if len(invalid) > 0 {
-			return t.uncertain(f, v.TokensUsed, fmt.Sprintf("benign verdict cited unverifiable evidence %v — evidence bar not met", invalid))
+			return t.uncertain(f, v.Tokens, fmt.Sprintf("benign verdict cited unverifiable evidence %v — evidence bar not met", invalid))
 		}
 		if len(valid) == 0 {
-			return t.uncertain(f, v.TokensUsed, "benign verdict cited no evidence — evidence bar not met")
+			return t.uncertain(f, v.Tokens, "benign verdict cited no evidence — evidence bar not met")
 		}
 	}
 	v.Evidence = valid
@@ -230,11 +243,11 @@ func (t *Triager) checkRef(ref string) bool {
 	return err == nil
 }
 
-func (t *Triager) uncertain(f sarif.Finding, tokens int, reason string) Verdict {
+func (t *Triager) uncertain(f sarif.Finding, tokens Tokens, reason string) Verdict {
 	return Verdict{
-		Verdict:    VerdictUncertain,
-		Reason:     reason,
-		TokensUsed: tokens,
+		Verdict: VerdictUncertain,
+		Reason:  reason,
+		Tokens:  tokens,
 	}
 }
 

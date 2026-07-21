@@ -47,7 +47,7 @@ type Config struct {
 	ReportPath       string
 	DigestPath       string // byte-bounded report for size-capped surfaces; empty → skip
 	DigestBytes      int    // digest size cap; 0 → report.DefaultDigestBytes
-	SummaryPath      string // headline only, for surfaces that want a count and a link; empty → skip
+	SummaryPath      string // headline + bounded verdict table, for the seed PR body; empty → skip
 	TriagedSARIFPath string // verdict-annotated copy of the input SARIF; empty → skip
 
 	// Scope is what gets triaged, decided by the caller from the trigger
@@ -65,7 +65,12 @@ type Config struct {
 	MaxGrepMatches int // per grep_repo call; 0 → agent default
 	Parallel       int
 
-	LinkBase         string
+	LinkBase string
+	RunURL   string // CI run this triage ran in; the summary footer links to it
+	// RunLabel names the run in the summary heading, e.g. "seed". The caller
+	// derives it from the mode it chose — mode itself stays out of Config, so
+	// no pipeline behaviour can ever come to depend on it.
+	RunLabel         string
 	IssueLabel       string
 	IssueTitlePrefix string // prepended to filed issue titles (e.g. "<TEST> ")
 
@@ -217,7 +222,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 				items = append(items, uncachedUncertain(o.finding, fmt.Sprintf("triage failed: %v", o.err)))
 				continue
 			}
-			fmt.Fprintf(cfg.Log, "[%d/%d] %s → %s (%d tokens)\n", done, len(llmQueue), o.finding.Location(), o.verdict.Verdict, o.verdict.TokensUsed)
+			fmt.Fprintf(cfg.Log, "[%d/%d] %s → %s (%d tokens)\n", done, len(llmQueue), o.finding.Location(), o.verdict.Verdict, o.verdict.Tokens.Total())
 			mergeVerdict(c, cfg, o.finding, o.verdict, &items)
 		}
 	}
@@ -248,7 +253,9 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		}
 	}
 	if cfg.SummaryPath != "" {
-		if err := os.WriteFile(cfg.SummaryPath, []byte(report.RenderSummary(items)), 0o644); err != nil {
+		sopts := opts
+		sopts.Model, sopts.RunURL, sopts.RunLabel = cfg.Model, cfg.RunURL, cfg.RunLabel
+		if err := os.WriteFile(cfg.SummaryPath, []byte(report.RenderSummary(items, sopts)), 0o644); err != nil {
 			return summary, fmt.Errorf("write summary: %w", err)
 		}
 	}
@@ -307,7 +314,7 @@ func mergeVerdict(c *cache.Cache, cfg Config, f sarif.Finding, v agent.Verdict, 
 		CodeHash:   hash,
 		Model:      cfg.Model,
 		DecidedAt:  cfg.Now().UTC().Format(time.RFC3339),
-		TokensUsed: v.TokensUsed,
+		TokensUsed: v.Tokens.Total(),
 	}
 	if v.ShortCircuit {
 		e.Model = "rule:short-circuit"
@@ -325,7 +332,7 @@ func mergeVerdict(c *cache.Cache, cfg Config, f sarif.Finding, v agent.Verdict, 
 	it := itemFromEntry(f, e)
 	it.Cached = false
 	it.ShortCircuit = v.ShortCircuit
-	it.TokensUsed = v.TokensUsed
+	it.TokensIn, it.TokensOut = v.Tokens.In, v.Tokens.Out
 	*items = append(*items, it)
 }
 
@@ -505,7 +512,7 @@ func summarize(items []report.Item) Summary {
 		if it.Deferred {
 			s.Deferred++
 		}
-		s.TokensUsed += it.TokensUsed
+		s.TokensUsed += it.TokensIn + it.TokensOut
 	}
 	return s
 }

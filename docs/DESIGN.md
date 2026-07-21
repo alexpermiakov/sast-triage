@@ -248,15 +248,38 @@ returns exit code. No hidden state.
   worst-case footer are reserved before any finding is written. Rendering this
   belongs in the binary; making each consumer parse the report's markdown to fit
   their surface is the failure this replaces.
-- `triage-summary.md` (`-summary`, on by default): the headline alone — counts,
-  no findings. It is the seed PR body. That body sits directly above a
-  `cache.json` diff carrying every verdict with its reason and cited evidence,
-  in the one place a reviewer can actually edit a verdict; a digest there
-  restates thousands of stanzas where nobody can act on them, and on a real
-  backlog blows the 65,536-character body cap while doing it. The body links out
-  to the run summary (digest) and artifacts (full report) instead. Counts come
-  from the same `writeHeadline` all three renderings share, so the PR and the
-  report can never disagree about what the run found.
+- `triage-summary.md` (`-summary`, on by default): the headline plus ONE table —
+  severity, verdict, rule, location, why — capped at 15 rows, no evidence lists
+  and no stanzas. It is the seed PR body, used verbatim. That body sits directly
+  above a `cache.json` diff carrying every verdict with its reason and cited
+  evidence, in the one place a reviewer can actually edit a verdict; a digest
+  there restates thousands of stanzas where nobody can act on them, and on a
+  real backlog blows the 65,536-character body cap while doing it. A 975-finding
+  run renders in about 2 KB. Four decisions:
+  - **Rows are ordered by verdict class** (exploitable, benign, uncertain),
+    severity descending within each. The classes ask different things of the
+    reader — work, a suppression to approve, an FYI — and interleaving them by
+    severity alone means sorting them apart by hand.
+  - **Over the cap, SEVERITY filters; it never truncates the tail.** Cutting a
+    class-ordered list at row 15 would hide a critical `uncertain` behind a
+    dozen identical medium `benign` rows. Filtering to critical/high instead
+    means the collapse line can only ever say "+N medium/low", which is what
+    makes it safe to skim past. Under the cap nothing is filtered, so no
+    collapse line exists there at all. The one fallback: an all-medium run
+    would filter to an empty table, so it shows the head of the list instead.
+  - **Deferred findings get no row.** They carry no verdict; a row invites a
+    reviewer to act on a finding the run never looked at. The headline counts
+    them.
+  - **The footer attributes each column**: severity is the scanner's number,
+    the verdict is one named model's. A reader weighing a wall of proposed
+    suppressions is entitled to know which model produced them without opening
+    the workflow file.
+
+  Counts come from the same `writeHeadline` all three renderings share, so the
+  PR body and the report can never disagree about what the run found. Token
+  spend is reported as input and output separately (`162k in / 7k out`): they
+  are priced differently by every provider and move for different reasons —
+  input tracks how much code the loop read, output how much the model wrote.
 - Cache delta: ALL verdict classes are written (exploitable verdicts are also
   memory — otherwise re-triaged forever).
 - With `-create-issues` (off by default — most teams track vulnerabilities
