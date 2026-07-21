@@ -49,11 +49,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Your scanner goes here — CodeQL, gosec, Snyk Code, anything emitting SARIF 2.1.0
+      # Your scanner goes here — Semgrep, CodeQL, Opengrep, Snyk Code, anything emitting SARIF 2.1.0
       - name: Scan → findings.sarif
         run: |
-          pipx install semgrep
-          semgrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
+          pipx install opengrep
+          opengrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
 
       - name: Triage
         uses: alexpermiakov/sast-triage@v1
@@ -88,10 +88,11 @@ jobs:
           fetch-depth: 0 # need the base branch to diff against
           ref: ${{ github.event.pull_request.head.sha }} # the PR head, not the merge commit
 
+      # Your scanner goes here — Semgrep, CodeQL, Opengrep, Snyk Code, anything emitting SARIF 2.1.0
       - name: Scan → findings.sarif
         run: |
-          pipx install semgrep
-          semgrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
+          pipx install opengrep
+          opengrep scan --config=auto --dataflow-traces --sarif-output=findings.sarif
 
       - name: Triage
         uses: alexpermiakov/sast-triage@v1

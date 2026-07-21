@@ -47,8 +47,8 @@ jobs:
       - name: Scan
         if: steps.llm.outputs.skip != 'true'
         run: |
-          pipx install semgrep
-          semgrep scan --config=auto --dataflow-traces \
+          pipx install opengrep
+          opengrep scan --config=auto --dataflow-traces \
             --exclude testdata --sarif-output=findings.sarif
 
       # Dogfood: `uses: ./` resolves action.yml from this checkout, so PRs run

@@ -57,8 +57,8 @@ jobs:
 
       - name: Scan
         run: |
-          pipx install semgrep
-          semgrep scan --config=auto --dataflow-traces \
+          pipx install opengrep
+          opengrep scan --config=auto --dataflow-traces \
             --exclude testdata --sarif-output=findings.sarif
 
       # mode: baseline — triage everything, gate nothing. A seeding run that
