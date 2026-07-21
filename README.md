@@ -5,7 +5,11 @@
 [![Go version](https://img.shields.io/github/go-mod/go-version/alexpermiakov/sast-triage)](go.mod)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**You turned on a SAST scanner — Semgrep, CodeQL, SonarQube — got 400 findings, and turned it off.** Most were false positives; nobody had time to check. The AI triage that fixes that exists, but it's a paid tier: Semgrep, GitHub, and Snyk all charge $25–30 per developer per month for it — $15k–18k a year for a 50-developer team.
+**A SAST scanner alone — Semgrep, opengrep, CodeQL, gosec — fails your CI on noise. Put `sast-triage` after it, and CI fails on vulnerabilities only.**
+
+An LLM agent reads the code behind each finding; only `exploitable` verdicts — with cited `file:line` evidence — block the PR (`mode: report` makes it advisory).
+
+_Any SARIF 2.1.0 scanner · any OpenAI-compatible or Anthropic model, local included · MIT_
 
 <!-- TODO(launch): hero screenshot — Actions run summary of the real-project eval run, showing the report header + one benign verdict with evidence -->
 
@@ -277,8 +281,9 @@ The GitHub Action exposes every flag as an input of the same name, minus the lea
 | `-repo`                | `.`                       | Repository root the findings refer to                                                      |
 | `-cache`               | `.sast-triage/cache.json` | Verdict cache (commit it to git)                                                           |
 | `-report`              | `triage-report.md`        | Markdown report output — complete, uncapped                                                |
-| `-digest`              | `triage-digest.md`        | Size-bounded report for the step summary / a PR body; `""` skips it                        |
+| `-digest`              | `triage-digest.md`        | Size-bounded report for the step summary; `""` skips it                                    |
 | `-digest-bytes`        | `50000`                   | Digest cap — clears both the 1 MiB summary and 65,536-char PR body limits                  |
+| `-summary`             | `triage-summary.md`       | One line of counts, no findings — the seed PR body; `""` skips it                          |
 | `-triaged-sarif`       | `triaged.sarif`           | SARIF copy with benign findings relabelled via `suppressions[]`; `""` skips it             |
 | `-effort`              | `medium`                  | Depth: `small`, `medium`, `large`                                                          |
 | `-max-findings-budget` | `50`                      | Max findings triaged per run (0 = unlimited)                                               |

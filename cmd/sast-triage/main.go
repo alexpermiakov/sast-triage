@@ -34,6 +34,7 @@ func main() {
 		reportPath       = flag.String("report", "triage-report.md", "markdown report output (complete; no size cap)")
 		digestPath       = flag.String("digest", "triage-digest.md", "byte-bounded digest of the report, for surfaces that cap size — the Actions step summary (1 MiB) and PR/issue bodies (65,536 chars). On by default: a report too large to publish is the common failure, not the rare one. Empty = skip")
 		digestBytes      = flag.Int("digest-bytes", report.DefaultDigestBytes, "size cap for -digest; findings past it are dropped by priority (benign first, exploitable last) and counted in the footer")
+		summaryPath      = flag.String("summary", "triage-summary.md", "one-line accounting of the run (counts only, no findings), for surfaces that should carry a count and a link rather than the findings themselves — the seed PR body sits above a cache diff that already holds every verdict. Empty = skip")
 		triagedSARIF     = flag.String("triaged-sarif", "triaged.sarif", "verdict-annotated copy of the input SARIF (benign findings carry suppressions, nothing is deleted) — upload it to Code Scanning or feed it to DefectDojo. On by default; empty = skip")
 		scopeMode        = flag.String("scope", scope.Full, "what to triage: full (every finding in the SARIF) or diff (only findings in files changed since -base-ref). Decided by your trigger, never by cache state")
 		baseRef          = flag.String("base-ref", "", "base to diff against for -scope diff, e.g. origin/main")
@@ -96,6 +97,7 @@ func main() {
 		ReportPath:       *reportPath,
 		DigestPath:       *digestPath,
 		DigestBytes:      *digestBytes,
+		SummaryPath:      *summaryPath,
 		TriagedSARIFPath: *triagedSARIF,
 		Scope:            *scopeMode,
 		BaseRef:          *baseRef,
