@@ -74,9 +74,9 @@ inputs:
     default: "50000"
   summary:
     description: >-
-      One-line accounting of the run (counts only, no findings). Used as the seed
-      PR body, which sits above a cache diff that already carries every verdict.
-      Empty = skip.
+      Run headline plus one bounded verdict table (15 rows max). Used verbatim as
+      the seed PR body, which sits above a cache diff carrying every verdict in
+      full. Empty = skip.
     default: triage-summary.md
   triaged-sarif:
     description: >-
@@ -210,6 +210,7 @@ runs:
         INPUT_GITHUB_REPO: ${{ inputs.github-repo }}
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
         INPUT_LINK_BASE: ${{ inputs.link-base }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         INPUT_EXTRA_ARGS: ${{ inputs.extra-args }}
       run: |
         args=(
@@ -242,6 +243,9 @@ runs:
         args+=(-summary "$INPUT_SUMMARY")
         if [ -n "$INPUT_DIGEST_BYTES" ]; then args+=(-digest-bytes "$INPUT_DIGEST_BYTES"); fi
         if [ -n "$INPUT_LINK_BASE" ]; then args+=(-link-base "$INPUT_LINK_BASE"); fi
+        # Not an input: there is exactly one correct value on a runner, and it
+        # is one the workflow author should never have to look up.
+        args+=(-run-url "$RUN_URL")
         if [ -n "$INPUT_GITHUB_REPO" ]; then args+=(-github-repo "$INPUT_GITHUB_REPO"); fi
         if [ "$INPUT_CREATE_ISSUES" = "true" ]; then args+=(-create-issues); fi
         if [ -n "$INPUT_EXTRA_ARGS" ]; then
@@ -286,7 +290,6 @@ runs:
         INPUT_CACHE: ${{ inputs.cache }}
         INPUT_CACHE_WRITE: ${{ inputs.cache-write }}
         INPUT_SUMMARY: ${{ inputs.summary }}
-        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         HEAD_REF: ${{ github.head_ref }}
         IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
         GH_TOKEN: ${{ inputs.github-token }}
@@ -328,21 +331,17 @@ runs:
           git checkout -B "$BRANCH"
           git commit -m "$MSG"
           git push -f origin "$BRANCH"
-          # Counts and links, never the findings. The review surface for this PR
-          # is the cache diff below the body — every verdict with its reason and
-          # cited evidence, in the one place editing a verdict is possible. A
-          # digest here restates all of that where nobody can act on it, and on a
-          # real backlog blows the 65,536-character body cap doing so.
+          # The body is the binary's -summary output verbatim: a headline and a
+          # bounded verdict table. Composing it here instead would mean this
+          # shell knowing the verdict counts, which means parsing markdown — the
+          # failure -summary exists to remove. The fallback covers -summary being
+          # cleared; the PR still opens, pointing at the diff below it.
           BODY=triage-body.md
-          {
-            echo "Seeded verdict cache."
-            echo
-            if [ -n "$INPUT_SUMMARY" ] && [ -f "$INPUT_SUMMARY" ]; then cat "$INPUT_SUMMARY"; fi
-            echo
-            echo "Review the proposed suppressions in the \`$INPUT_CACHE\` diff below — each entry carries the verdict, its reason, and the evidence cited for it. Edit or drop any entry before merging."
-            echo
-            echo "Full detail: the digest on the [run summary]($RUN_URL), and \`triage-report.md\` in that run's artifacts."
-          } > "$BODY"
+          if [ -n "$INPUT_SUMMARY" ] && [ -f "$INPUT_SUMMARY" ]; then
+            BODY="$INPUT_SUMMARY"
+          else
+            echo "Seeded verdict cache. Review the proposed suppressions in the \`$INPUT_CACHE\` diff below before merging." > "$BODY"
+          fi
           if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
             gh pr edit "$BRANCH" --body-file "$BODY"
           elif ! gh pr create --head "$BRANCH" --title "seed sast-triage cache" --body-file "$BODY"; then

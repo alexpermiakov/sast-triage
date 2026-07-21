@@ -283,7 +283,8 @@ The GitHub Action exposes every flag as an input of the same name, minus the lea
 | `-report`              | `triage-report.md`        | Markdown report output — complete, uncapped                                                |
 | `-digest`              | `triage-digest.md`        | Size-bounded report for the step summary; `""` skips it                                    |
 | `-digest-bytes`        | `50000`                   | Digest cap — clears both the 1 MiB summary and 65,536-char PR body limits                  |
-| `-summary`             | `triage-summary.md`       | One line of counts, no findings — the seed PR body; `""` skips it                          |
+| `-summary`             | `triage-summary.md`       | Headline + one bounded verdict table (15 rows) — the seed PR body; `""` skips it           |
+| `-run-url`             | —                         | CI run URL linked from the summary footer (the action fills it in)                         |
 | `-triaged-sarif`       | `triaged.sarif`           | SARIF copy with benign findings relabelled via `suppressions[]`; `""` skips it             |
 | `-effort`              | `medium`                  | Depth: `small`, `medium`, `large`                                                          |
 | `-max-findings-budget` | `50`                      | Max findings triaged per run (0 = unlimited)                                               |

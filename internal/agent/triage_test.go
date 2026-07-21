@@ -95,8 +95,13 @@ func TestOneTurnResolve(t *testing.T) {
 	if len(v.Evidence) != 2 {
 		t.Errorf("evidence = %v, want both refs kept", v.Evidence)
 	}
-	if v.TokensUsed != 150 {
-		t.Errorf("tokensUsed = %d, want 150", v.TokensUsed)
+	if v.Tokens.Total() != 150 {
+		t.Errorf("tokens = %+v, want 150 total", v.Tokens)
+	}
+	// The split is what the summary footer reports; a total that is right
+	// while the halves are swapped would go unnoticed without this.
+	if v.Tokens.In != 100 || v.Tokens.Out != 50 {
+		t.Errorf("tokens = %+v, want In:100 Out:50", v.Tokens)
 	}
 	// The first prompt must carry the trace as the starting map.
 	prompt := client.requests[0].Messages[0].Content[0].Text
@@ -269,8 +274,8 @@ func TestTokenBudgetStopsBeforeOvershoot(t *testing.T) {
 	if len(client.requests) != 1 {
 		t.Errorf("made %d calls, want 1: the loop must not issue a call that cannot fit", len(client.requests))
 	}
-	if v.TokensUsed > 10000 {
-		t.Errorf("tokensUsed = %d exceeds the 10k budget — predictive stop failed", v.TokensUsed)
+	if v.Tokens.Total() > 10000 {
+		t.Errorf("tokens = %d exceeds the 10k budget — predictive stop failed", v.Tokens.Total())
 	}
 }
 

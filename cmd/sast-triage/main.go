@@ -34,7 +34,7 @@ func main() {
 		reportPath       = flag.String("report", "triage-report.md", "markdown report output (complete; no size cap)")
 		digestPath       = flag.String("digest", "triage-digest.md", "byte-bounded digest of the report, for surfaces that cap size — the Actions step summary (1 MiB) and PR/issue bodies (65,536 chars). On by default: a report too large to publish is the common failure, not the rare one. Empty = skip")
 		digestBytes      = flag.Int("digest-bytes", report.DefaultDigestBytes, "size cap for -digest; findings past it are dropped by priority (benign first, exploitable last) and counted in the footer")
-		summaryPath      = flag.String("summary", "triage-summary.md", "one-line accounting of the run (counts only, no findings), for surfaces that should carry a count and a link rather than the findings themselves — the seed PR body sits above a cache diff that already holds every verdict. Empty = skip")
+		summaryPath      = flag.String("summary", "triage-summary.md", "run headline plus one bounded table (15 rows max, no evidence lists) — the seed PR body, which sits above a cache diff that already holds every verdict in full. Empty = skip")
 		triagedSARIF     = flag.String("triaged-sarif", "triaged.sarif", "verdict-annotated copy of the input SARIF (benign findings carry suppressions, nothing is deleted) — upload it to Code Scanning or feed it to DefectDojo. On by default; empty = skip")
 		scopeMode        = flag.String("scope", scope.Full, "what to triage: full (every finding in the SARIF) or diff (only findings in files changed since -base-ref). Decided by your trigger, never by cache state")
 		baseRef          = flag.String("base-ref", "", "base to diff against for -scope diff, e.g. origin/main")
@@ -50,6 +50,7 @@ func main() {
 		maxFindings      = flag.Int("max-findings-budget", 50, "max findings triaged by LLM per run; overflow deferred as uncertain (0 = unlimited)")
 		parallel         = flag.Int("parallel", 4, "findings triaged concurrently")
 		linkBase         = flag.String("link-base", "", "base URL for clickable evidence links, e.g. https://github.com/owner/repo/blob/<sha>")
+		runURL           = flag.String("run-url", "", "URL of the CI run, linked from the -summary footer, e.g. https://github.com/owner/repo/actions/runs/<id>")
 		createIssues     = flag.Bool("create-issues", false, "file GitHub issues for exploitable findings (needs GITHUB_TOKEN)")
 		githubRepo       = flag.String("github-repo", os.Getenv("GITHUB_REPOSITORY"), "owner/name for issue creation")
 		issueLabel       = flag.String("issue-label", "security/triage-confirmed", "label for filed issues")
@@ -111,6 +112,8 @@ func main() {
 		MaxGrepMatches:   eff.MaxGrepMatches,
 		Parallel:         *parallel,
 		LinkBase:         *linkBase,
+		RunURL:           *runURL,
+		RunLabel:         runLabel(*mode),
 		IssueLabel:       *issueLabel,
 		IssueTitlePrefix: *issueTitlePrefix,
 		Log:              os.Stderr,
@@ -192,4 +195,15 @@ func main() {
 	if fail {
 		os.Exit(3)
 	}
+}
+
+// runLabel names the run for the summary heading. Baseline runs are called
+// "seeding" everywhere else — in the docs, the workflow, and the PR title the
+// summary becomes the body of — so the heading says "seed" rather than making
+// the reader translate the flag value.
+func runLabel(mode string) string {
+	if mode == pipeline.ModeBaseline {
+		return "seed"
+	}
+	return mode
 }

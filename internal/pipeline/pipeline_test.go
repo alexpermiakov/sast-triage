@@ -514,12 +514,16 @@ func TestRunSkipsDigestWhenUnset(t *testing.T) {
 	}
 }
 
-// The seed PR body is this file. It must exist when asked for and must stay a
-// count: the findings belong in the cache diff that PR is opened to review.
-func TestRunWritesCountsOnlySummary(t *testing.T) {
+// The seed PR body is this file. It must exist when asked for, carry the
+// attribution the pipeline is the only layer that knows (model, run URL, what
+// kind of run this was), and stay small — the findings live in full in the
+// cache diff that PR is opened to review.
+func TestRunWritesSummary(t *testing.T) {
 	dir := t.TempDir()
 	cfg := baseConfig(t, dir)
 	cfg.SummaryPath = filepath.Join(dir, "triage-summary.md")
+	cfg.RunURL = "https://github.com/o/r/actions/runs/7"
+	cfg.RunLabel = "seed"
 	cfg.Client = &fakeClient{responses: []*agent.Response{
 		textResp(`{"verdict": "exploitable", "reason": "id flows unsanitized to QueryRow", "evidence": ["app/handlers.go:16"]}`),
 		textResp(`{"verdict": "benign", "reason": "sample credential in demo code", "evidence": ["app/config.go:7"]}`),
@@ -533,11 +537,50 @@ func TestRunWritesCountsOnlySummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summary not written: %v", err)
 	}
-	if !strings.Contains(string(summary), "**1 exploitable**") {
-		t.Errorf("summary must carry the accounting:\n%s", summary)
+	for _, want := range []string{
+		"### sast-triage · seed",
+		"**1 exploitable**",
+		"❌ exploitable",
+		cfg.Model,
+		cfg.RunURL,
+	} {
+		if !strings.Contains(string(summary), want) {
+			t.Errorf("summary missing %q:\n%s", want, summary)
+		}
 	}
-	if strings.Contains(string(summary), "unsanitized") {
-		t.Errorf("summary must carry no per-finding detail:\n%s", summary)
+	// Evidence is the report's job and the cache diff's; a body that carries
+	// it grows without bound.
+	if strings.Contains(string(summary), "app/handlers.go:16") {
+		t.Errorf("summary must not carry evidence lists:\n%s", summary)
+	}
+}
+
+// The token split the summary footer reports has to survive the trip from the
+// agent through the cache merge, not be recomputed or dropped along the way.
+func TestRunReportsTokenSplit(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseConfig(t, dir)
+	cfg.SummaryPath = filepath.Join(dir, "triage-summary.md")
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "uncertain", "reason": "no conclusion"}`),
+		textResp(`{"verdict": "uncertain", "reason": "no conclusion"}`),
+	}}
+
+	s, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// textResp bills 100 in / 50 out per call, two findings, one call each.
+	if s.TokensUsed != 300 {
+		t.Errorf("TokensUsed = %d, want 300 (both directions, both findings)", s.TokensUsed)
+	}
+	summary, err := os.ReadFile(cfg.SummaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(summary), "200 in / 100 out tokens") {
+		t.Errorf("summary must report input and output separately:\n%s", summary)
 	}
 }
 

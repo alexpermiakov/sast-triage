@@ -5,6 +5,7 @@ package report
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -26,7 +27,8 @@ type Item struct {
 	Cached       bool // verdict came from the cache, not a fresh LLM run
 	ShortCircuit bool // decided by pure rule
 	Deferred     bool // run budget exhausted before this finding was triaged
-	TokensUsed   int
+	TokensIn     int
+	TokensOut    int
 	IssueRef     int
 }
 
@@ -35,6 +37,16 @@ type Item struct {
 // e.g. "https://github.com/owner/repo/blob/<sha>".
 type Options struct {
 	LinkBase string
+
+	// Model and RunURL are attribution, used by the summary's footer. A
+	// reader deciding whether to trust a wall of verdicts needs to know which
+	// model produced them and where the full evidence lives; neither is
+	// derivable from the items.
+	Model  string
+	RunURL string
+
+	// RunLabel names what this run was, e.g. "seed". Empty omits it.
+	RunLabel string
 }
 
 // Location renders the flagged region as "file:line[-line]".
@@ -79,12 +91,17 @@ func Render(items []Item, opts Options) string {
 	return b.String()
 }
 
-// writeHeadline emits the one-line accounting both renderings share. Deferred
-// is broken out from uncertain: "8500 uncertain" reads as 8500 judgements the
-// model could not make, when in fact the run never looked at them.
+// writeHeadline emits the accounting every rendering shares, so the report,
+// the digest and the summary can never disagree about what one run found.
+//
+// Two lines: what was found, then what it cost. Verdict classes lead with
+// exploitable — the reader's first question is whether anything is on fire,
+// not how many suppressions are proposed. Deferred is broken out from
+// uncertain: "8500 uncertain" reads as 8500 judgements the model could not
+// make, when in fact the run never looked at them.
 func writeHeadline(b *strings.Builder, items []Item) {
 	var benign, exploitable, uncertain, deferred int
-	var cached, fresh, tokens int
+	var cached, fresh, tokensIn, tokensOut int
 	for _, it := range items {
 		switch {
 		case it.Deferred:
@@ -101,14 +118,29 @@ func writeHeadline(b *strings.Builder, items []Item) {
 		} else {
 			fresh++
 		}
-		tokens += it.TokensUsed
+		tokensIn += it.TokensIn
+		tokensOut += it.TokensOut
 	}
-	fmt.Fprintf(b, "%d findings — **%d benign** (proposed suppressions), **%d exploitable**, **%d uncertain**",
-		len(items), benign, exploitable, uncertain)
+	fmt.Fprintf(b, "%d findings — **%d exploitable** · **%d benign** (proposed suppressions) · **%d uncertain**",
+		len(items), exploitable, benign, uncertain)
 	if deferred > 0 {
-		fmt.Fprintf(b, ", **%d deferred** (not triaged)", deferred)
+		fmt.Fprintf(b, " · **%d deferred** (not triaged)", deferred)
 	}
-	fmt.Fprintf(b, ". %d from cache, %d newly triaged (%d tokens).\n", cached, fresh, tokens)
+	fmt.Fprintf(b, "\n%d from cache · %d newly triaged · %s in / %s out tokens\n",
+		cached, fresh, humanCount(tokensIn), humanCount(tokensOut))
+}
+
+// humanCount abbreviates token counts. "162k" is the number a reader acts on;
+// the exact 162,314 is noise in a header and is in the report anyway.
+func humanCount(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000_000), ".0") + "M"
+	case n >= 1_000:
+		return fmt.Sprintf("%dk", n/1_000)
+	default:
+		return strconv.Itoa(n)
+	}
 }
 
 func section(b *strings.Builder, title string, items []Item, opts Options, note string) {
@@ -272,20 +304,206 @@ func writeDigestFooter(b *strings.Builder, omitted map[string]int) {
 	b.WriteString("_The complete report is `triage-report.md` in this run's artifacts._\n")
 }
 
-// RenderSummary renders the run's accounting and nothing else: the same
-// headline the report and the digest lead with, with no per-finding detail
-// behind it.
+// summaryMaxRows bounds the summary table. Fifteen rows is about what a reader
+// takes in without scrolling, and it is the point past which a table stops
+// being a summary and becomes the report it links to.
+const summaryMaxRows = 15
+
+// RenderSummary renders the run as a headline plus one bounded table: one row
+// per verdict, five columns, no evidence lists and no stanzas. It is the seed
+// PR body.
 //
-// It exists for surfaces where the findings are already reviewable somewhere
-// better, and where restating them is actively worse than a count. The seed
-// pull request is the case: its body sits directly above a cache diff carrying
-// every verdict with its reason and cited evidence, so a digest there
-// duplicates thousands of stanzas into the one place nobody can review them —
-// and on a real backlog it hits the 65,536-character body cap while doing it.
-func RenderSummary(items []Item) string {
+// The size bound is the point. That body sits directly above a cache diff
+// carrying every verdict with its reason and cited evidence, in the one place
+// a reviewer can actually edit a verdict — so the body's job is to say what
+// the run found and let the diff carry the detail. A digest there restates
+// thousands of stanzas where nobody can act on them, and on a real backlog
+// blows the 65,536-character body cap doing it.
+//
+// Rows are ordered by verdict class (exploitable, benign, uncertain), severity
+// descending within each. Class beats severity because the classes ask
+// different things of the reader: an exploitable finding is work, a benign one
+// is a suppression to approve or veto, and mixing them by severity alone means
+// the reader sorts them apart by hand. Deferred findings get no row — they
+// carry no verdict — and are counted in the headline instead.
+func RenderSummary(items []Item, opts Options) string {
+	rows := append(append(filter(items, "exploitable"), filter(items, "benign")...), filter(items, "uncertain")...)
+
 	var b strings.Builder
+	b.WriteString("### sast-triage")
+	if opts.RunLabel != "" {
+		fmt.Fprintf(&b, " · %s", opts.RunLabel)
+	}
+	b.WriteString("\n\n")
 	writeHeadline(&b, items)
+
+	if len(rows) > 0 {
+		shown, collapsed := splitRows(rows)
+		b.WriteString("\n| severity | verdict | rule | location | why |\n")
+		b.WriteString("| --- | --- | --- | --- | --- |\n")
+		for _, it := range shown {
+			fmt.Fprintf(&b, "| %s | %s | `%s` | %s | %s |\n",
+				severityBucket(it.Severity), verdictCell(it.Verdict),
+				compactRule(it.RuleID), link(it.Location(), opts), cell(it.Reason))
+		}
+		if len(collapsed) > 0 {
+			fmt.Fprintf(&b, "\n+%d %s — see the report.\n", len(collapsed), bucketList(collapsed))
+		}
+	}
+
+	fmt.Fprintf(&b, "\nMerging approves the suppressions. Drop any entry from `%s` — it is re-triaged next run.\n", cacheFileName)
+	writeSummaryFooter(&b, opts)
 	return b.String()
+}
+
+// cacheFileName is the default cache path, named in the summary so the
+// instruction to drop an entry points at a real file. An operator who moved it
+// with -cache reads one wrong path in a PR body; threading the real value
+// through three layers to fix that is not worth it.
+const cacheFileName = ".sast-triage/cache.json"
+
+// writeSummaryFooter attributes each column to whoever produced it. Severity is
+// the scanner's number, not a judgement this tool made, and the verdict is one
+// specific model's — a reader weighing a wall of suppressions is entitled to
+// know which, without digging into the workflow file.
+func writeSummaryFooter(b *strings.Builder, opts Options) {
+	parts := []string{"severity: your scanner"}
+	verdict := "verdict: sast-triage"
+	if opts.Model != "" {
+		verdict += " (" + opts.Model + ")"
+	}
+	parts = append(parts, verdict)
+	if opts.RunURL != "" {
+		parts = append(parts, fmt.Sprintf("[run summary](%s)", opts.RunURL))
+		parts = append(parts, fmt.Sprintf("[`triage-report.md`](%s#artifacts)", opts.RunURL))
+	} else {
+		parts = append(parts, "`triage-report.md` in the run artifacts")
+	}
+	fmt.Fprintf(b, "\n<sub>%s</sub>\n", strings.Join(parts, " · "))
+}
+
+// highSeverity is the critical/high floor, the line splitRows collapses on.
+const highSeverity = 7.0
+
+// splitRows decides which rows the table lists and which collapse into the
+// count line, preserving the caller's ordering in both.
+//
+// Under the cap nothing is filtered — a short table costs nothing and a
+// medium-severity row is worth seeing when there is room. Over it, SEVERITY
+// decides, not position: collapsing the tail of a class-ordered list would
+// hide a critical uncertain finding behind a dozen identical medium benign
+// ones. Filtering to critical/high instead means the collapse line can only
+// ever say "medium/low", which is what makes it safe to skim past.
+//
+// A run whose findings are all medium or low would filter to an empty table,
+// which tells the reader nothing; there, the head of the list is better than
+// no rows at all.
+func splitRows(rows []Item) (shown, collapsed []Item) {
+	if len(rows) <= summaryMaxRows {
+		return rows, nil
+	}
+	for _, it := range rows {
+		if it.Severity >= highSeverity {
+			shown = append(shown, it)
+		} else {
+			collapsed = append(collapsed, it)
+		}
+	}
+	if len(shown) == 0 {
+		shown, collapsed = rows[:summaryMaxRows], rows[summaryMaxRows:]
+	}
+	// More critical/high rows than fit: the overflow joins the collapsed set,
+	// copied rather than appended in place — shown and the overflow share a
+	// backing array, and appending into the tail of one would write over the
+	// other.
+	if len(shown) > summaryMaxRows {
+		overflow := append([]Item{}, shown[summaryMaxRows:]...)
+		collapsed = append(overflow, collapsed...)
+		shown = shown[:summaryMaxRows]
+	}
+	return shown, collapsed
+}
+
+// severityBucket names the scanner's security-severity score using GitHub Code
+// Scanning's thresholds, so a row reads the same as the Security tab a reader
+// may have open next to it.
+func severityBucket(score float64) string {
+	switch {
+	case score >= 9.0:
+		return "critical"
+	case score >= 7.0:
+		return "high"
+	case score >= 4.0:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+// bucketList names the severities present in the collapsed tail, worst first,
+// so "+42 medium/low" says the collapse hid nothing urgent — and says so
+// honestly when it did.
+func bucketList(items []Item) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range []string{"critical", "high", "medium", "low"} {
+		for _, it := range items {
+			if severityBucket(it.Severity) == name && !seen[name] {
+				seen[name] = true
+				out = append(out, name)
+			}
+		}
+	}
+	return strings.Join(out, "/")
+}
+
+// verdictCell prefixes the verdict with a glyph. The glyph is redundant with
+// the word beside it on purpose: it survives being skimmed, and it is what
+// makes a wall of green rows with one red one readable at a glance.
+func verdictCell(verdict string) string {
+	switch verdict {
+	case "exploitable":
+		return "❌ exploitable"
+	case "benign":
+		return "✅ benign"
+	default:
+		return "⚠️ uncertain"
+	}
+}
+
+// compactRule trims a rule ID to its last three dot-separated segments.
+// Scanner rule IDs are namespaced to the point of unreadability
+// ("go.lang.security.audit.sqli.string-formatted-query"), and the leading
+// segments are the ones every row in the table shares. The tail is what
+// distinguishes rules and what an operator greps for.
+func compactRule(ruleID string) string {
+	parts := strings.Split(ruleID, ".")
+	if len(parts) <= 3 {
+		return ruleID
+	}
+	return strings.Join(parts[len(parts)-3:], ".")
+}
+
+// maxCellRunes bounds the why column. Reasons are model prose with no length
+// contract; one long one turns every row into a paragraph.
+const maxCellRunes = 72
+
+// cell makes arbitrary text safe and short enough for a markdown table cell: a
+// literal pipe would end the column early and a newline would end the row.
+func cell(s string) string {
+	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= maxCellRunes {
+		return s
+	}
+	// Cut on a word boundary when there is one close to the limit, so the
+	// truncation does not land mid-identifier.
+	trimmed := strings.TrimRight(string(r[:maxCellRunes]), " ")
+	if i := strings.LastIndex(trimmed, " "); i > maxCellRunes-16 {
+		trimmed = trimmed[:i]
+	}
+	return trimmed + "…"
 }
 
 // IssueTitle names the GitHub issue for an exploitable finding.
