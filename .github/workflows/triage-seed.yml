@@ -58,8 +58,7 @@ jobs:
       - name: Scan
         run: |
           pipx install semgrep
-          semgrep scan --config=auto --dataflow-traces \
-            --exclude testdata --sarif-output=findings.sarif
+          semgrep scan --exclude testdata --sarif-output=findings.sarif
 
       # mode: baseline — triage everything, gate nothing. A seeding run that
       # fails on the backlog it was invoked to catalogue is useless.
