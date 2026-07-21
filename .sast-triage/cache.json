@@ -1,1 +1,46 @@
-
+{
+  "version": 1,
+  "entries": {
+    "synthetic:0fbbae0429f6dd5bd67ce72d371093a45f540f2bccce1cbb1d0d44f471fa4ac9": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "benign",
+      "reason": "The flagged region is a static YAML configuration file (.github/dependabot.yml:14-20) committed by repository maintainers. There is no attacker-controlled input that reaches this file — it is not dynamically generated, not served over HTTP, and not influenced by external parameters. The missing cooldown is a configuration hardening recommendation, not an exploitable vulnerability in this codebase.",
+      "evidence": [
+        ".github/dependabot.yml:14-20"
+      ],
+      "codeHash": "sha256:16a2fc325ce6b58f3d12aed74a6cbd190672afe0d3439f81bd949054cdf73bc2",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-21T09:23:56Z",
+      "tokensUsed": 8958
+    },
+    "synthetic:4d37171025e51f08cf8758203b01fc40473041647fe3ed6e9e8767c9b90b40f1": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "benign",
+      "reason": "The `math/rand/v2` import is used exclusively on line 215 in `backoff()` to add jitter to retry-delay calculations for HTTP backoff. The input to `rand.Int64N` is derived purely from internal constants (`c.baseDelay`, `c.maxDelay`) and an internal loop counter (`attempt`) — none of which are attacker-controlled. Even if an attacker could influence the retry timing (they cannot), the output is only used to sleep a random amount of time before retrying an HTTP request; it has no role in generating cryptographic keys, tokens, secrets, session identifiers, or any security-sensitive value. Using `crypto/rand` here would be wasteful and unnecessary. This is a textbook false positive for CWE-338, which targets cryptographic uses of weak PRNGs.",
+      "evidence": [
+        "internal/agent/openai.go:9",
+        "internal/agent/openai.go:206-216",
+        "internal/agent/openai.go:140-173"
+      ],
+      "codeHash": "sha256:5d1dce04bf02401849a3074e339b0070d272233e29ab72e312eb2a44fa1620f2",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-21T09:23:57Z",
+      "tokensUsed": 24658
+    },
+    "synthetic:a46b9fb36f28a5d90c3d72434c68c61d0d6f5bad48fc80961b2cee05656d809d": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "benign",
+      "reason": "The flagged region is a static Dependabot configuration YAML file committed by the repository maintainers. There is no runtime attacker-controlled input path to this file — its contents are determined entirely by the repository owners. The absence of a `cooldown` block is a configuration hardening recommendation (defense-in-depth against supply-chain risks in the Go module ecosystem), not an exploitable code vulnerability where attacker-supplied input reaches a sink. No code path exists for an attacker to influence this configuration at runtime.",
+      "evidence": [
+        ".github/dependabot.yml:1-10"
+      ],
+      "codeHash": "sha256:36357e1d2eeb058c209c3ab10f928bb572df9155884db7ffa3ca6a745f65cb7d",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-21T09:24:01Z",
+      "tokensUsed": 10395
+    }
+  }
+}
