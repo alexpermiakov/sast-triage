@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -165,6 +166,27 @@ func TestWipedCacheCostsMoneyNotSafety(t *testing.T) {
 	}
 	if _, ok := c.Lookup(Key{Fingerprint: "fp1", RuleID: "go.sqli", File: "app/handlers.go"}, root, flagged, "model-a"); ok {
 		t.Error("a wiped cache produced a hit")
+	}
+}
+
+// TestEmptyCacheFileCostsMoneyNotSafety: Load treats a zero-byte file as an
+// empty cache so a run is not stranded on it. That recovery must land on the
+// same side of the invariant as every other one — an empty cache, not a
+// permissive one.
+func TestEmptyCacheFileCostsMoneyNotSafety(t *testing.T) {
+	flagged := Region{File: "app/handlers.go", Start: 17, End: 17}
+	root := copySampleApp(t)
+
+	path := filepath.Join(t.TempDir(), "cache.json")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("an empty cache file must load as empty, not fail: %v", err)
+	}
+	if _, ok := c.Lookup(Key{Fingerprint: "fp1", RuleID: "go.sqli", File: "app/handlers.go"}, root, flagged, "model-a"); ok {
+		t.Error("an empty cache file produced a hit")
 	}
 }
 
