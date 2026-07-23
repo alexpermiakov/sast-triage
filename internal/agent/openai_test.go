@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -329,5 +330,139 @@ func TestOpenAIPoolSizedToParallel(t *testing.T) {
 	}
 	if same := NewOpenAIClient("http://x", "", 0); same.http.Transport.(*http.Transport).MaxIdleConnsPerHost != 1 {
 		t.Error("non-positive parallel must clamp to 1, not 0")
+	}
+}
+
+// Temperature 0 must reach the wire as an explicit "temperature":0, and a nil
+// Temperature must omit the key entirely. The distinction is the whole point
+// of the pointer: a plain float64 makes the deliberate 0 — the default that
+// keeps verdicts reproducible — indistinguishable from "unset", and reasoning
+// models that reject any explicit temperature need the omission to be
+// reachable.
+func TestOpenAITemperatureOnTheWire(t *testing.T) {
+	zero := 0.0
+	for _, tc := range []struct {
+		name  string
+		temp  *float64
+		want  string
+		field bool
+	}{
+		{name: "explicit zero", temp: &zero, want: "0", field: true},
+		{name: "unset", temp: nil, field: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var body map[string]json.RawMessage
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw, _ := io.ReadAll(r.Body)
+				if err := json.Unmarshal(raw, &body); err != nil {
+					t.Errorf("decode request: %v", err)
+				}
+				io.WriteString(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{}}`)
+			}))
+			defer srv.Close()
+
+			c := NewOpenAIClient(srv.URL, "", 1)
+			if _, err := c.Complete(context.Background(), Request{
+				Model:       "m",
+				Temperature: tc.temp,
+				Messages:    []Message{{Role: "user", Content: []Block{{Type: "text", Text: "go"}}}},
+			}); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+
+			got, ok := body["temperature"]
+			if ok != tc.field {
+				t.Fatalf("temperature key present = %v, want %v (body: %v)", ok, tc.field, body)
+			}
+			if tc.field && string(got) != tc.want {
+				t.Errorf("temperature = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// A reasoning model that rejects an explicit temperature must not fail the
+// run: the client drops the field, retries once, and latches the decision so
+// the rest of the run stops paying for a 400 per finding. Without this, the
+// hard-coded temperature 0 would turn every such endpoint into a usage error
+// with no flag to fix it.
+func TestOpenAITemperatureRejectionFallsBack(t *testing.T) {
+	var sent []bool // whether each request carried a temperature
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		raw, _ := io.ReadAll(r.Body)
+		json.Unmarshal(raw, &body)
+		_, has := body["temperature"]
+		sent = append(sent, has)
+		if has {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"error":{"message":"Unsupported value: 'temperature' does not support 0 with this model"}}`)
+			return
+		}
+		io.WriteString(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	zero := 0.0
+	c := NewOpenAIClient(srv.URL, "", 1)
+	var logged strings.Builder
+	c.log = &logged
+	req := Request{
+		Model:       "o-series",
+		Temperature: &zero,
+		Messages:    []Message{{Role: "user", Content: []Block{{Type: "text", Text: "go"}}}},
+	}
+
+	resp, err := c.Complete(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
+		t.Errorf("content = %+v, want the retry's reply", resp.Content)
+	}
+	if want := []bool{true, false}; !slices.Equal(sent, want) {
+		t.Fatalf("temperature per request = %v, want %v (send, then retry without)", sent, want)
+	}
+	if !strings.Contains(logged.String(), "rejected temperature") {
+		t.Errorf("fallback was silent; log = %q", logged.String())
+	}
+
+	// Latched: the second finding must not re-pay for the rejection, and must
+	// not re-log it either.
+	if _, err := c.Complete(context.Background(), req); err != nil {
+		t.Fatalf("Complete after latch: %v", err)
+	}
+	if want := []bool{true, false, false}; !slices.Equal(sent, want) {
+		t.Errorf("temperature per request = %v, want %v (never sent again)", sent, want)
+	}
+	if n := strings.Count(logged.String(), "rejected temperature"); n != 1 {
+		t.Errorf("notice logged %d times, want once per run", n)
+	}
+}
+
+// A 400 that is not about temperature stays fatal: the fallback must not
+// swallow a genuinely malformed request into a silent retry.
+func TestOpenAIUnrelatedBadRequestStaysFatal(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusBadRequest)
+		io.WriteString(w, `{"error":{"message":"model not found"}}`)
+	}))
+	defer srv.Close()
+
+	zero := 0.0
+	c := NewOpenAIClient(srv.URL, "", 1)
+	c.log = io.Discard
+	_, err := c.Complete(context.Background(), Request{
+		Model:       "nope",
+		Temperature: &zero,
+		Messages:    []Message{{Role: "user", Content: []Block{{Type: "text", Text: "go"}}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "model not found") {
+		t.Fatalf("err = %v, want the endpoint's message", err)
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (no retry on an unrelated 400)", calls)
 	}
 }

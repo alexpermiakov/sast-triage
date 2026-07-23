@@ -31,6 +31,9 @@ func (a *AnthropicClient) Complete(ctx context.Context, req Request) (*Response,
 		MaxTokens: int64(req.MaxTokens),
 		System:    []anthropic.TextBlockParam{{Text: req.System}},
 	}
+	if req.Temperature != nil {
+		params.Temperature = anthropic.Float(*req.Temperature)
+	}
 	for _, m := range req.Messages {
 		params.Messages = append(params.Messages, toMessageParam(m))
 	}

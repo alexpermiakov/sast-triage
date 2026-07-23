@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,6 +34,13 @@ type OpenAIClient struct {
 	baseDelay  time.Duration
 	maxDelay   time.Duration
 	sleep      func(context.Context, time.Duration) error
+
+	// dropTemp latches once an endpoint has rejected an explicit temperature,
+	// so the whole run stops sending it after the first refusal instead of
+	// burning one wasted 400 per finding. Atomic: parallel workers share one
+	// client. log receives the one-line notice.
+	dropTemp atomic.Bool
+	log      io.Writer
 }
 
 // NewOpenAIClient targets baseURL (e.g. http://localhost:11434/v1 for Ollama).
@@ -58,14 +68,19 @@ func NewOpenAIClient(baseURL, apiKey string, parallel int) *OpenAIClient {
 		baseDelay:  time.Second,
 		maxDelay:   60 * time.Second,
 		sleep:      sleepCtx,
+		log:        os.Stderr,
 	}
 }
 
 func (c *OpenAIClient) Complete(ctx context.Context, req Request) (*Response, error) {
 	body := oaiRequest{
-		Model:     req.Model,
-		MaxTokens: req.MaxTokens,
-		Messages:  toOpenAIMessages(req),
+		Model:       req.Model,
+		MaxTokens:   req.MaxTokens,
+		Temperature: req.Temperature,
+		Messages:    toOpenAIMessages(req),
+	}
+	if c.dropTemp.Load() {
+		body.Temperature = nil // this endpoint refused it earlier in the run
 	}
 	for _, t := range req.Tools {
 		params := map[string]any{"type": "object", "properties": t.Properties}
@@ -86,6 +101,21 @@ func (c *OpenAIClient) Complete(ctx context.Context, req Request) (*Response, er
 		return nil, fmt.Errorf("openai marshal request: %w", err)
 	}
 	raw, err := c.post(ctx, buf)
+	// Reasoning models commonly reject an explicit temperature outright. That
+	// is a property of the endpoint, not of this request, so retrying it
+	// unchanged is pointless and failing the run would make an operator hand-
+	// tune a knob for a value they never chose. Drop the field, latch the
+	// decision for the rest of the run, and say so once.
+	if errors.Is(err, errTemperatureRejected) && body.Temperature != nil {
+		if !c.dropTemp.Swap(true) {
+			fmt.Fprintf(c.log, "sast-triage: %s rejected temperature %v; retrying without it (verdicts may vary between runs)\n", c.baseURL, *body.Temperature)
+		}
+		body.Temperature = nil
+		if buf, err = json.Marshal(body); err != nil {
+			return nil, fmt.Errorf("openai marshal request: %w", err)
+		}
+		raw, err = c.post(ctx, buf)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +183,11 @@ func (c *OpenAIClient) post(ctx context.Context, buf []byte) ([]byte, error) {
 			return a.body, nil
 		case retryableStatus(a.code):
 			lastErr = fmt.Errorf("openai chat.completions: %s: %s", a.status, snippet(a.body))
+		case rejectsTemperature(a.code, a.body):
+			// Same "would build it wrong again" logic, except the caller can
+			// build a different one. Tagged so it can, and still an error if
+			// it does not.
+			return nil, fmt.Errorf("openai chat.completions: %s: %s: %w", a.status, snippet(a.body), errTemperatureRejected)
 		default:
 			// 4xx other than 429: a request we built wrong and would build
 			// wrong again. Fail now rather than burning the budget.
@@ -201,6 +236,21 @@ func (c *OpenAIClient) attempt(ctx context.Context, buf []byte) (oaiAttempt, err
 // limited) and 5xx (overloaded, restarting, gateway hiccup) are transient.
 func retryableStatus(code int) bool {
 	return code == http.StatusTooManyRequests || code >= 500
+}
+
+// errTemperatureRejected marks a 400 that names temperature as the offending
+// parameter, so Complete can retry once without it.
+var errTemperatureRejected = errors.New("endpoint rejected the temperature parameter")
+
+// rejectsTemperature reports whether a failed attempt is the endpoint refusing
+// an explicit temperature. There is no machine-readable signal for this — the
+// param name in the error text is all any provider gives — so the match is
+// deliberately narrow: a 400 (never a 401/403/404, which mean something else
+// entirely) whose body names the parameter. A miss just means the operator
+// sees the original error, which is the behaviour without this path at all.
+func rejectsTemperature(code int, body []byte) bool {
+	return code == http.StatusBadRequest &&
+		bytes.Contains(bytes.ToLower(body), []byte("temperature"))
 }
 
 // backoff returns the delay before the next attempt: exponential from
@@ -348,6 +398,9 @@ type oaiRequest struct {
 	Tools      []oaiTool    `json:"tools,omitempty"`
 	ToolChoice string       `json:"tool_choice,omitempty"`
 	MaxTokens  int          `json:"max_tokens,omitempty"`
+	// Pointer, so omitempty drops the field when unset without also dropping
+	// the deliberate temperature 0 that a plain float would make unsendable.
+	Temperature *float64 `json:"temperature,omitempty"`
 }
 
 type oaiMessage struct {

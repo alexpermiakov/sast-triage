@@ -9,8 +9,6 @@
 
 An LLM agent reads the code behind each finding; only `exploitable` verdicts — with cited `file:line` evidence — block the PR (`mode: report` makes it advisory).
 
-_Any SARIF 2.1.0 scanner · any OpenAI-compatible or Anthropic model, local included · MIT_
-
 <!-- TODO(launch): hero screenshot — Actions run summary of the real-project eval run, showing the report header + one benign verdict with evidence -->
 
 ## How it works
@@ -31,6 +29,8 @@ graph LR
 ```
 
 ## Quick Start
+
+_Any SARIF 2.1.0 scanner · any OpenAI-compatible or Anthropic model — Ollama and vLLM included, nothing leaves your runner_
 
 <details open>
 <summary><b>Step 1: seed the cache</b> — one <code>workflow_dispatch</code> run, one review PR, merged once</summary>
@@ -103,7 +103,7 @@ jobs:
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           sarif-file: findings.sarif # the file the scan step wrote
           scope: diff # only findings in files this PR changed
-          base-ref: origin/${{ github.base_ref }}
+          base-ref: origin/${{ github.base_ref }} # what "changed" is measured against
           mode: enforce # fail the check on exploitable findings
           cache-write: branch # commit to the PR's own head branch
           pr-comments: "true" # verdicts inline on the diff

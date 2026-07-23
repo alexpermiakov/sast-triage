@@ -36,11 +36,18 @@ type ToolDef struct {
 
 // Request is one model call.
 type Request struct {
-	Model     string
-	System    string
-	Messages  []Message
-	Tools     []ToolDef
-	MaxTokens int
+	Model    string
+	System   string
+	Messages []Message
+	Tools    []ToolDef
+	// Temperature is the sampling randomness, 0 in every production call: a
+	// verdict is committed to the cache and gates builds, so one that flips
+	// between runs on unchanged code is a defect, not variety. nil means "send
+	// no temperature field at all" — a distinct request, not the same as 0,
+	// and the shape reasoning models that reject the parameter need. Adapters
+	// fall back to it on their own; nothing above them chooses.
+	Temperature *float64
+	MaxTokens   int
 }
 
 // Response is the model's reply plus token accounting for the budget.

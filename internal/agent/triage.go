@@ -48,6 +48,10 @@ type Config struct {
 	MaxTokensPerCall int // default 4096
 	MaxReadLines     int // per read_file call; default 200
 	MaxGrepMatches   int // per grep_repo call; default 50
+	// Temperature is the sampling randomness for every call; nil defaults to
+	// 0. There is deliberately no flag behind it — see Request.Temperature for
+	// why 0 and not the provider default, and why this is a pointer.
+	Temperature *float64
 }
 
 // Triager runs one bounded loop per finding.
@@ -71,6 +75,10 @@ func New(client Client, repoRoot string, cfg Config) (*Triager, error) {
 	}
 	if cfg.MaxTokensPerCall <= 0 {
 		cfg.MaxTokensPerCall = 4096
+	}
+	if cfg.Temperature == nil {
+		zero := 0.0
+		cfg.Temperature = &zero
 	}
 	if cfg.MaxReadLines > 0 {
 		exec.readLines = cfg.MaxReadLines
@@ -104,11 +112,12 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 
 	for i := 0; i < maxIter; i++ {
 		resp, err := t.client.Complete(ctx, Request{
-			Model:     t.cfg.Model,
-			System:    systemPrompt,
-			Messages:  msgs,
-			Tools:     tools,
-			MaxTokens: t.cfg.MaxTokensPerCall,
+			Model:       t.cfg.Model,
+			System:      systemPrompt,
+			Messages:    msgs,
+			Tools:       tools,
+			Temperature: t.cfg.Temperature,
+			MaxTokens:   t.cfg.MaxTokensPerCall,
 		})
 		if err != nil {
 			return Verdict{}, fmt.Errorf("triage finding %s: %w", f.Fingerprint, err)
