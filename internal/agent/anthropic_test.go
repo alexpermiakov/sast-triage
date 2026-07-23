@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -48,6 +50,46 @@ func TestAnthropicClientHonoursBaseURL(t *testing.T) {
 	}
 	if len(resp.Content) != 1 || resp.Content[0].Text != "ok" {
 		t.Errorf("content = %+v, want one text block \"ok\"", resp.Content)
+	}
+}
+
+// The native API removed the sampling parameters on the current Claude
+// generation: Opus 4.8/4.7, Sonnet 5 and Fable 5 answer temperature, top_p or
+// top_k with a 400. The loop still asks for temperature 0 (the OpenAI adapter
+// needs it), so this adapter must drop it — sending it failed every call, and a
+// run that fails every call reports zero findings triaged with no other signal.
+func TestAnthropicClientNeverSendsTemperature(t *testing.T) {
+	var body map[string]json.RawMessage
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Errorf("unmarshal body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant",
+			"model":"claude-opus-4-8","content":[{"type":"text","text":"ok"}],
+			"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer srv.Close()
+
+	zero := 0.0
+	if _, err := NewAnthropicClient("k", srv.URL).Complete(context.Background(), Request{
+		Model:       "claude-opus-4-8",
+		System:      "sys",
+		Messages:    []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hi"}}}},
+		Temperature: &zero, // what the Triager sends on every call
+		MaxTokens:   16,
+	}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	for _, key := range []string{"temperature", "top_p", "top_k"} {
+		if _, ok := body[key]; ok {
+			t.Errorf("request carried %q; the current Claude models reject it with a 400", key)
+		}
 	}
 }
 
