@@ -44,7 +44,7 @@ func main() {
 		provider         = flag.String("provider", "", "LLM API shape: anthropic for Claude's native API, openai for anything OpenAI-compatible. Empty (default) infers openai from -base-url")
 		baseURL          = flag.String("base-url", "", "API base URL, e.g. http://localhost:11434/v1 for local Ollama. Selects the OpenAI-compatible path on its own; with -provider anthropic it overrides Claude's endpoint. No default: the tool only ever talks to the endpoint you name")
 		model            = flag.String("model", "", "model name for the chosen provider — always required (e.g. claude-sonnet-5 for anthropic, qwen2.5-coder:7b for openai/Ollama)")
-		effort           = flag.String("effort", "medium", "triage depth per finding: small|medium|large (scales read/grep caps, token budget, iterations)")
+		effort           = flag.String("effort", "medium", "triage depth per finding: small|medium|large|xlarge (scales read/grep caps, token budget, iterations)")
 		maxIter          = flag.Int("max-iterations", 10, "agent loop iteration cap per finding (overrides -effort)")
 		tokenBudget      = flag.Int("token-budget", 60000, "token budget per finding, input+output (overrides -effort)")
 		maxFindings      = flag.Int("max-findings-budget", 50, "max findings triaged by LLM per run; overflow deferred as uncertain (0 = unlimited)")

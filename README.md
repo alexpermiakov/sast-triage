@@ -290,7 +290,7 @@ The GitHub Action exposes every flag as an input of the same name, minus the lea
 | `-summary`             | `triage-summary.md`       | Headline + one bounded verdict table (15 rows) — the seed PR body; `""` skips it           |
 | `-run-url`             | —                         | CI run URL linked from the summary footer (the action fills it in)                         |
 | `-triaged-sarif`       | `triaged.sarif`           | SARIF copy with benign findings relabelled via `suppressions[]`; `""` skips it             |
-| `-effort`              | `medium`                  | Depth: `small`, `medium`, `large`                                                          |
+| `-effort`              | `medium`                  | Depth: `small`, `medium`, `large`, `xlarge`                                                |
 | `-max-findings-budget` | `50`                      | Max findings triaged per run (0 = unlimited)                                               |
 | `-parallel`            | `4`                       | Concurrent findings                                                                        |
 | `-pr` / `-commit`      | —                         | PR number + head SHA for inline comments (the action fills both from the event)            |
@@ -316,6 +316,7 @@ The action also takes `api-key` (routed to whichever provider you selected), plu
 | `small`  | 100             | 25           | 30k          | 6          |
 | `medium` | 200             | 50           | 60k          | 10         |
 | `large`  | 400             | 100          | 120k         | 15         |
+| `xlarge` | 800             | 200          | 240k         | 22         |
 
 `-token-budget` and `-max-iterations` override the preset individually.
 

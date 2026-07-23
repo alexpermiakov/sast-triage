@@ -85,7 +85,7 @@ inputs:
       to DefectDojo. On by default; empty = skip.
     default: triaged.sarif
   effort:
-    description: "Triage depth per finding: small | medium | large"
+    description: "Triage depth per finding: small | medium | large | xlarge"
     default: medium
   max-findings-budget:
     description: Max findings triaged by LLM per run (0 = unlimited)
@@ -146,7 +146,7 @@ runs:
       if: ${{ !startsWith(github.action_path, github.workspace) }}
       shell: bash
       env:
-        SAST_TRIAGE_VERSION: v1.2.5
+        SAST_TRIAGE_VERSION: v1.2.6
         SAST_TRIAGE_REPO: alexpermiakov/sast-triage
         GH_TOKEN: ${{ inputs.github-token }}
       run: |

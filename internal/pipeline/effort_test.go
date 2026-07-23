@@ -11,6 +11,7 @@ func TestEffortPreset(t *testing.T) {
 		{"medium", Effort{MaxReadLines: 200, MaxGrepMatches: 50, TokenBudget: 60000, MaxIterations: 10}},
 		{"", Effort{MaxReadLines: 200, MaxGrepMatches: 50, TokenBudget: 60000, MaxIterations: 10}},
 		{"large", Effort{MaxReadLines: 400, MaxGrepMatches: 100, TokenBudget: 120000, MaxIterations: 15}},
+		{"xlarge", Effort{MaxReadLines: 800, MaxGrepMatches: 200, TokenBudget: 240000, MaxIterations: 22}},
 	} {
 		got, err := EffortPreset(tc.name)
 		if err != nil {
@@ -24,7 +25,7 @@ func TestEffortPreset(t *testing.T) {
 			t.Errorf("EffortPreset(%q) has an unbounded dimension: %+v", tc.name, got)
 		}
 	}
-	if _, err := EffortPreset("xl"); err == nil {
+	if _, err := EffortPreset("huge"); err == nil {
 		t.Error("unknown preset: want error")
 	}
 }

@@ -203,9 +203,9 @@ cache backend.
   blocks, not stop reasons, so adapters only map messages/tools/usage.
   Fail-closed verdicts mean a weaker local model yields more `uncertain`, never
   silent `benign`; the deciding model is recorded per cache entry.
-- All caps scale with `-effort small|medium|large`, never disappear: read_file
-  lines 100/200/400, grep matches 25/50/100, token budget 30k/60k/120k,
-  iteration cap 6/10/15. Medium is the default; explicit
+- All caps scale with `-effort small|medium|large|xlarge`, never disappear:
+  read_file lines 100/200/400/800, grep matches 25/50/100/200, token budget
+  30k/60k/120k/240k, iteration cap 6/10/15/22. Medium is the default; explicit
   `-token-budget`/`-max-iterations` override the preset. Tool descriptions
   advertise the active caps.
 - First prompt includes: rule background, finding message, flagged snippet, and
