@@ -1,4 +1,16 @@
 {
   "version": 1,
-  "entries": {}
+  "entries": {
+    "synthetic:4fe6c0467edb31027eebf2f8a41aa92bc3f7efe7b3914df94d5d4739b24b4b8b": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "uncertain",
+      "reason": "token budget exhausted (55936 of 60000 tokens used; the next call would exceed the budget)",
+      "evidence": null,
+      "codeHash": "sha256:79dd6239c954baaef6f705018052ff867e0452810fcff7d73bdcc00b1ca71d8c",
+      "model": "deepseek-v4-flash",
+      "decidedAt": "2026-07-23T23:06:27Z",
+      "tokensUsed": 55936
+    }
+  }
 }
