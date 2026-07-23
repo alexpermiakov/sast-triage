@@ -103,7 +103,13 @@ func (c *OpenAIClient) Complete(ctx context.Context, req Request) (*Response, er
 		})
 	}
 	if len(body.Tools) > 0 {
+		// "required" forces at least one call this turn; the loop asks for it on
+		// the first turn only, so a reasoning model that would otherwise answer
+		// straight from the prompt must gather evidence before it can verdict.
 		body.ToolChoice = "auto"
+		if req.ForceToolUse {
+			body.ToolChoice = "required"
+		}
 	}
 
 	buf, err := json.Marshal(body)

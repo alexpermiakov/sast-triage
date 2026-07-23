@@ -53,6 +53,17 @@ type Request struct {
 	// than failing every call; steer that provider with the prompt and -effort.
 	Temperature *float64
 	MaxTokens   int
+
+	// ForceToolUse asks the provider to make at least one tool call this turn
+	// instead of answering directly (OpenAI tool_choice "required"; Anthropic
+	// tool_choice "any"). The loop sets it only on the first turn, and only when
+	// tools are offered, to guarantee an evidence-gathering call before any
+	// verdict — some models (Kimi K3 at its default reasoning_effort "max")
+	// otherwise reason straight to a verdict from the prompt and never touch a
+	// tool, which the minimum-evidence gate can only catch after the fact. Later
+	// turns leave the choice to the model so it can emit the verdict. Ignored
+	// where no tools are offered (context-free and short-circuit tiers).
+	ForceToolUse bool
 }
 
 // Response is the model's reply plus token accounting for the budget.

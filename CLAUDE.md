@@ -86,7 +86,12 @@ scan, and their line numbers are pinned to unit tests.
   successful tool calls gets one nudge, then `uncertain`. Rejected calls are not
   evidence. Exempt: the context-free and short-circuit tiers, which are offered
   no tools. Tool calls per finding are logged next to tokens — a provider that
-  ignores the `tools` array is invisible in a token count.
+  ignores the `tools` array is invisible in a token count. The first turn also
+  *forces* a call (`tool_choice` required/any via `Request.ForceToolUse`, then
+  relaxes) so a straight-to-verdict reasoning model (Kimi K3 at `reasoning_effort`
+  max) gathers evidence before it can answer; provider-agnostic, guarded by
+  "tools offered", so the no-tools tiers are unaffected. The nudge remains the
+  fallback for a call that is forced but unsuccessful.
 - **Bounded loop**: hard iteration cap (default 10) and token budget per finding;
   run-level `--max-findings-budget` cap. No unbounded loops anywhere.
 - **Nondeterminism is quarantined in `internal/agent`**. Every other package is

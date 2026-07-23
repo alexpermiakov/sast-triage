@@ -90,6 +90,33 @@ func TestOpenAIToolCallRoundTrip(t *testing.T) {
 	}
 }
 
+// ForceToolUse maps to tool_choice "required", so a reasoning model that would
+// answer straight from the prompt must make a call. Without it the choice is
+// "auto" (covered by TestOpenAIToolCallRoundTrip).
+func TestOpenAIForceToolUseSendsRequired(t *testing.T) {
+	var got capturedRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &got)
+		io.WriteString(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{\"verdict\":\"uncertain\"}"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	_, err := NewOpenAIClient(srv.URL, "k", 1).Complete(context.Background(), Request{
+		Model:        "kimi-k3",
+		MaxTokens:    128,
+		Tools:        []ToolDef{{Name: "read_file", Properties: map[string]any{"path": map[string]any{"type": "string"}}, Required: []string{"path"}}},
+		Messages:     []Message{{Role: "user", Content: []Block{{Type: "text", Text: "triage"}}}},
+		ForceToolUse: true,
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got.Choice != "required" {
+		t.Errorf("ForceToolUse should send tool_choice=required, got %q", got.Choice)
+	}
+}
+
 // A user turn carrying tool_result blocks must become standalone role:"tool"
 // messages keyed by tool_call_id — OpenAI's shape, not Anthropic's.
 func TestOpenAIToolResultBecomesToolRole(t *testing.T) {

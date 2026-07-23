@@ -410,6 +410,32 @@ func TestContextFreeRuleSingleCallNoTools(t *testing.T) {
 	if len(client.requests[0].Tools) != 0 {
 		t.Error("context-free tier must not offer tools")
 	}
+	if client.requests[0].ForceToolUse {
+		t.Error("context-free tier must not force a tool call it offered no tool for")
+	}
+}
+
+// TestForceToolUseFirstTurnOnly pins the tool_choice policy: the loop demands a
+// tool call on the opening turn — so a model that would answer straight from the
+// prompt (Kimi K3 at reasoning_effort max) must gather evidence first — then
+// relaxes, or the model could never stop calling tools to emit its verdict.
+func TestForceToolUseFirstTurnOnly(t *testing.T) {
+	client := &fakeClient{responses: []*Response{
+		toolUseResp("t1", "read_file", map[string]any{"path": "app/handlers.go"}),
+		textResp(`{"verdict": "exploitable", "reason": "id flows unsanitized to QueryRow", "evidence": ["app/handlers.go:17-18"]}`),
+	}}
+	if _, err := newTriager(t, client, Config{}).TriageFinding(context.Background(), sqliFinding(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("got %d calls, want 2", len(client.requests))
+	}
+	if !client.requests[0].ForceToolUse {
+		t.Error("first turn must force a tool call")
+	}
+	if client.requests[1].ForceToolUse {
+		t.Error("later turns must relax so the model can emit the verdict")
+	}
 }
 
 func TestTransportErrorPropagates(t *testing.T) {
