@@ -231,6 +231,21 @@ cache backend.
   evidence varies per finding and cannot be known upfront.
 - Budget/iteration exhaustion → uncertain. Verdict = structured JSON parsed
   into a Go struct; parse failure → one retry → uncertain.
+- Minimum-evidence gate: where tools were offered, a verdict reached with zero
+  successful `read_file`/`grep_repo` calls buys one nudge naming the tools, then
+  uncertain. Such a verdict rests on the prompt — the snippet and the scanner's
+  own trace — which is the claim triage exists to check, not evidence for it.
+  It is also the only signal that distinguishes a model answering from the
+  prompt from a provider that accepts the `tools` array and never emits a call:
+  both produce well-formed verdicts at a normal token cost, and one silently
+  reduces the tool to an expensive coin flip. Rejected tool calls do not count —
+  a refused path returned no code. The gate follows the tools, so the
+  context-free and short-circuit tiers, offered none, are exempt. Uncertain
+  verdicts are gated too: one rule, no exceptions to reason about, and "you gave
+  up before reading anything" is worth one retry.
+- Tool calls per finding are reported next to tokens (per-finding log line, run
+  summary). Tokens alone cannot distinguish a run that read the code from one
+  that never opened a file; the pair is what makes a provider swap auditable.
 - Asymmetric authority (fail-closed): benign requires positive cited evidence.
   Injection posture: repo content is evidence, not instructions; prose claims
   of safety never satisfy the benign bar. Worst case for a fooled model is a

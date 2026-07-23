@@ -27,16 +27,38 @@ type fakeClient struct {
 	calls     int
 }
 
-func (c *fakeClient) Complete(_ context.Context, _ agent.Request) (*agent.Response, error) {
+// Complete replays the script, one entry per verdict, with one detail these
+// tests should not have to spell out per finding: the agent's minimum-evidence
+// gate rejects a verdict reached without a tool call, so the first turn of
+// every tool-bearing finding answers with a read_file instead of consuming a
+// scripted response. Context-free findings are offered no tools and take their
+// scripted verdict on the first call. The agent's own tests cover the gate;
+// here it is just the cost of admission.
+func (c *fakeClient) Complete(_ context.Context, req agent.Request) (*agent.Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls++
+	if len(req.Tools) > 0 && len(req.Messages) == 1 {
+		return evidenceResp(), nil
+	}
 	if len(c.responses) == 0 {
 		return nil, fmt.Errorf("fake client: script exhausted")
 	}
 	r := c.responses[0]
 	c.responses = c.responses[1:]
 	return r, nil
+}
+
+// evidenceResp reads a file that exists in sampleapp, so the call succeeds and
+// counts as evidence gathered.
+func evidenceResp() *agent.Response {
+	raw, _ := json.Marshal(map[string]any{"path": "app/handlers.go"})
+	return &agent.Response{
+		Content:      []agent.Block{{Type: "tool_use", ID: "t1", Name: "read_file", Input: raw}},
+		StopReason:   "tool_use",
+		InputTokens:  100,
+		OutputTokens: 50,
+	}
 }
 
 func textResp(text string) *agent.Response {
@@ -571,15 +593,20 @@ func TestRunReportsTokenSplit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// textResp bills 100 in / 50 out per call, two findings, one call each.
-	if s.TokensUsed != 300 {
-		t.Errorf("TokensUsed = %d, want 300 (both directions, both findings)", s.TokensUsed)
+	// Every scripted call bills 100 in / 50 out. Two findings: the tool-bearing
+	// one costs an evidence turn plus its verdict, the context-free one a
+	// single call — three calls, 300 in / 150 out.
+	if s.TokensUsed != 450 {
+		t.Errorf("TokensUsed = %d, want 450 (both directions, both findings)", s.TokensUsed)
+	}
+	if s.ToolCalls != 1 {
+		t.Errorf("ToolCalls = %d, want 1 (the tool-bearing finding read one file)", s.ToolCalls)
 	}
 	summary, err := os.ReadFile(cfg.SummaryPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(summary), "200 in / 100 out tokens") {
+	if !strings.Contains(string(summary), "300 in / 150 out tokens") {
 		t.Errorf("summary must report input and output separately:\n%s", summary)
 	}
 }
@@ -649,8 +676,10 @@ func TestRunModelChangeRetriagesOnlyUncertain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client2.calls != 1 {
-		t.Errorf("LLM calls on model change = %d, want 1 (only the uncertain finding re-triages)", client2.calls)
+	// Two calls, one finding: the evidence turn the gate requires, then the
+	// verdict. A third would mean a second finding was re-triaged.
+	if client2.calls != 2 {
+		t.Errorf("LLM calls on model change = %d, want 2 (only the uncertain finding re-triages)", client2.calls)
 	}
 	if s2.Cached != 2 || s2.Fresh != 1 {
 		t.Errorf("model change accounting = %+v, want 2 cached + 1 fresh", s2)

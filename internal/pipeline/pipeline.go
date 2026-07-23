@@ -89,8 +89,13 @@ type Summary struct {
 	Cached, Fresh, Deferred               int
 	NewExploitable                        int // exploitable verdicts decided this run (not cache hits)
 	TokensUsed                            int
-	IssuesFiled                           int
-	CommentsPosted                        int
+	// ToolCalls is the run's total successful read_file/grep_repo calls, over
+	// the findings triaged this run. Reported next to the tokens because the
+	// two together say what the spend bought: tokens with no tool calls is a
+	// model answering from the prompt, or a provider dropping the tools array.
+	ToolCalls      int
+	IssuesFiled    int
+	CommentsPosted int
 
 	// Scoped is how many findings the SARIF held before diff scoping dropped
 	// the ones outside the change; equal to Total on a full-scope run.
@@ -222,7 +227,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 				items = append(items, uncachedUncertain(o.finding, fmt.Sprintf("triage failed: %v", o.err)))
 				continue
 			}
-			fmt.Fprintf(cfg.Log, "[%d/%d] %s → %s (%d tokens)\n", done, len(llmQueue), o.finding.Location(), o.verdict.Verdict, o.verdict.Tokens.Total())
+			fmt.Fprintf(cfg.Log, "[%d/%d] %s → %s (%d tokens, %d tool calls)\n", done, len(llmQueue), o.finding.Location(), o.verdict.Verdict, o.verdict.Tokens.Total(), o.verdict.ToolCalls)
 			mergeVerdict(c, cfg, o.finding, o.verdict, &items)
 		}
 	}
@@ -332,7 +337,7 @@ func mergeVerdict(c *cache.Cache, cfg Config, f sarif.Finding, v agent.Verdict, 
 	it := itemFromEntry(f, e)
 	it.Cached = false
 	it.ShortCircuit = v.ShortCircuit
-	it.TokensIn, it.TokensOut = v.Tokens.In, v.Tokens.Out
+	it.TokensIn, it.TokensOut, it.ToolCalls = v.Tokens.In, v.Tokens.Out, v.ToolCalls
 	*items = append(*items, it)
 }
 
@@ -513,6 +518,7 @@ func summarize(items []report.Item) Summary {
 			s.Deferred++
 		}
 		s.TokensUsed += it.TokensIn + it.TokensOut
+		s.ToolCalls += it.ToolCalls
 	}
 	return s
 }

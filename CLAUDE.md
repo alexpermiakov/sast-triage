@@ -82,6 +82,11 @@ scan, and their line numbers are pinned to unit tests.
 - **Verdicts are three-valued**: `benign | exploitable | uncertain`. `benign`
   requires cited evidence (file:line list). Budget exhaustion, parse failure,
   or any ambiguity → `uncertain`. Never default to `benign`.
+- **Minimum-evidence gate**: where tools were offered, a verdict with zero
+  successful tool calls gets one nudge, then `uncertain`. Rejected calls are not
+  evidence. Exempt: the context-free and short-circuit tiers, which are offered
+  no tools. Tool calls per finding are logged next to tokens — a provider that
+  ignores the `tools` array is invisible in a token count.
 - **Bounded loop**: hard iteration cap (default 10) and token budget per finding;
   run-level `--max-findings-budget` cap. No unbounded loops anywhere.
 - **Nondeterminism is quarantined in `internal/agent`**. Every other package is
@@ -132,9 +137,12 @@ scan, and their line numbers are pinned to unit tests.
   `testdata/`. `scope` and the pipeline's diff tests build throwaway git repos
   with `exec.Command` and skip when git is unavailable.
 - `internal/agent` tests: fake Anthropic client with scripted tool_use sequences,
-  covering: 1-turn resolve, multi-turn trace-following, iteration-cap exhaustion,
-  malformed verdict JSON (→ one retry → uncertain), path-traversal tool call
-  (→ rejected, loop continues).
+  covering: shortest legal resolve (one read, then verdict), multi-turn
+  trace-following, iteration-cap exhaustion, malformed verdict JSON (→ one retry
+  → uncertain), path-traversal tool call (→ rejected, loop continues),
+  toolless verdict (→ one nudge → uncertain). The pipeline's fake answers the
+  first tool-bearing turn with a `read_file` so its scripts stay one entry per
+  verdict; the gate itself is the agent's test, not the pipeline's.
 - `go vet`, `-race` on everything. CI runs lint+test on every PR.
 
 ## CI conventions

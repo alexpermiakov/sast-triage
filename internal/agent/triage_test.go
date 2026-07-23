@@ -81,8 +81,13 @@ func newTriager(t *testing.T, client Client, cfg Config) *Triager {
 	return tr
 }
 
-func TestOneTurnResolve(t *testing.T) {
+// TestShortestResolve is the shortest transcript the loop accepts for a
+// tool-bearing finding: read the code, then answer. The minimum-evidence gate
+// makes one turn impossible here — only the context-free tier, which is offered
+// no tools, resolves in a single call.
+func TestShortestResolve(t *testing.T) {
 	client := &fakeClient{responses: []*Response{
+		toolUseResp("t1", "read_file", map[string]any{"path": "app/handlers.go"}),
 		textResp(`{"verdict": "exploitable", "reason": "id flows unsanitized from query param to QueryRow", "evidence": ["app/handlers.go:16", "app/handlers.go:17-18"]}`),
 	}}
 	v, err := newTriager(t, client, Config{}).TriageFinding(context.Background(), sqliFinding(t))
@@ -95,13 +100,16 @@ func TestOneTurnResolve(t *testing.T) {
 	if len(v.Evidence) != 2 {
 		t.Errorf("evidence = %v, want both refs kept", v.Evidence)
 	}
-	if v.Tokens.Total() != 150 {
-		t.Errorf("tokens = %+v, want 150 total", v.Tokens)
+	if v.Tokens.Total() != 300 {
+		t.Errorf("tokens = %+v, want 300 total", v.Tokens)
 	}
 	// The split is what the summary footer reports; a total that is right
 	// while the halves are swapped would go unnoticed without this.
-	if v.Tokens.In != 100 || v.Tokens.Out != 50 {
-		t.Errorf("tokens = %+v, want In:100 Out:50", v.Tokens)
+	if v.Tokens.In != 200 || v.Tokens.Out != 100 {
+		t.Errorf("tokens = %+v, want In:200 Out:100", v.Tokens)
+	}
+	if v.ToolCalls != 1 {
+		t.Errorf("ToolCalls = %d, want 1", v.ToolCalls)
 	}
 	// The first prompt must carry the trace as the starting map.
 	prompt := client.requests[0].Messages[0].Content[0].Text
@@ -109,6 +117,55 @@ func TestOneTurnResolve(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("first prompt missing %q", want)
 		}
+	}
+}
+
+// TestVerdictWithoutToolCallsNudgedThenUncertain pins the minimum-evidence
+// gate: a well-formed verdict reached without opening a file buys one nudge,
+// never a cache entry. This is the shape a provider that ignores the tools
+// array produces on every finding, and the verdict it produces looks fine.
+func TestVerdictWithoutToolCallsNudgedThenUncertain(t *testing.T) {
+	reply := `{"verdict": "benign", "reason": "the snippet parameterizes the query", "evidence": ["app/handlers.go:16"]}`
+	client := &fakeClient{responses: []*Response{textResp(reply), textResp(reply)}}
+	v, err := newTriager(t, client, Config{}).TriageFinding(context.Background(), sqliFinding(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Verdict != VerdictUncertain {
+		t.Errorf("verdict = %s, want uncertain (no code was read)", v.Verdict)
+	}
+	if !strings.Contains(v.Reason, "no code read") {
+		t.Errorf("reason = %q, want it to name the missing evidence gathering", v.Reason)
+	}
+	if v.ToolCalls != 0 {
+		t.Errorf("ToolCalls = %d, want 0", v.ToolCalls)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("got %d calls, want exactly one nudge", len(client.requests))
+	}
+	msgs := client.requests[1].Messages
+	if !strings.Contains(msgs[len(msgs)-1].Content[0].Text, "read_file") {
+		t.Error("nudge turn must name the tools the model skipped")
+	}
+}
+
+// The nudge is a real second chance: a model that goes and reads the code gets
+// its verdict accepted on the retry.
+func TestNudgedVerdictAcceptedAfterEvidence(t *testing.T) {
+	client := &fakeClient{responses: []*Response{
+		textResp(`{"verdict": "benign", "reason": "looks parameterized", "evidence": ["app/handlers.go:16"]}`),
+		toolUseResp("t1", "read_file", map[string]any{"path": "app/handlers.go"}),
+		textResp(`{"verdict": "exploitable", "reason": "fmt.Sprintf interpolates id into the query", "evidence": ["app/handlers.go:17-18"]}`),
+	}}
+	v, err := newTriager(t, client, Config{}).TriageFinding(context.Background(), sqliFinding(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Verdict != VerdictExploitable {
+		t.Errorf("verdict = %s, want the post-nudge verdict to stand", v.Verdict)
+	}
+	if v.ToolCalls != 1 {
+		t.Errorf("ToolCalls = %d, want 1", v.ToolCalls)
 	}
 }
 
@@ -185,6 +242,7 @@ func TestMalformedVerdictRetryThenUncertain(t *testing.T) {
 
 func TestMalformedVerdictRetryThenValid(t *testing.T) {
 	client := &fakeClient{responses: []*Response{
+		toolUseResp("t1", "read_file", map[string]any{"path": "app/handlers.go"}),
 		textResp("Verdict: exploitable, trust me."),
 		textResp("```json" + "\n" + `{"verdict": "exploitable", "reason": "unsanitized flow", "evidence": ["app/handlers.go:16"]}` + "\n" + "```"),
 	}}
@@ -201,6 +259,7 @@ func TestPathTraversalToolCallRejectedLoopContinues(t *testing.T) {
 	client := &fakeClient{responses: []*Response{
 		toolUseResp("t1", "read_file", map[string]any{"path": "../../go.mod"}),
 		textResp(`{"verdict": "uncertain", "reason": "could not verify", "evidence": []}`),
+		textResp(`{"verdict": "uncertain", "reason": "still could not verify", "evidence": []}`),
 	}}
 	v, err := newTriager(t, client, Config{}).TriageFinding(context.Background(), sqliFinding(t))
 	if err != nil {
@@ -217,6 +276,14 @@ func TestPathTraversalToolCallRejectedLoopContinues(t *testing.T) {
 	if !strings.Contains(result.Text, "escapes repo root") {
 		t.Errorf("rejection reason: %q", result.Text)
 	}
+	// A rejected call returned no code, so it is not evidence: the gate still
+	// fires, and the count the operator reads stays at what was actually read.
+	if v.ToolCalls != 0 {
+		t.Errorf("ToolCalls = %d, want 0 — a rejected call read nothing", v.ToolCalls)
+	}
+	if !strings.Contains(v.Reason, "rejected") {
+		t.Errorf("reason = %q, want it to name the rejected calls", v.Reason)
+	}
 }
 
 func TestBenignWithoutEvidenceFailsClosed(t *testing.T) {
@@ -228,7 +295,12 @@ func TestBenignWithoutEvidenceFailsClosed(t *testing.T) {
 	}
 	for name, reply := range tests {
 		t.Run(name, func(t *testing.T) {
-			client := &fakeClient{responses: []*Response{textResp(reply)}}
+			// Evidence was gathered, so the gate passes and these verdicts are
+			// judged on the evidence bar alone — the thing under test.
+			client := &fakeClient{responses: []*Response{
+				toolUseResp("t1", "read_file", map[string]any{"path": "app/handlers.go"}),
+				textResp(reply),
+			}}
 			v, err := newTriager(t, client, Config{}).TriageFinding(context.Background(), sqliFinding(t))
 			if err != nil {
 				t.Fatal(err)
@@ -330,6 +402,8 @@ func TestContextFreeRuleSingleCallNoTools(t *testing.T) {
 	if v.Verdict != VerdictExploitable {
 		t.Errorf("verdict = %s", v.Verdict)
 	}
+	// One call, no nudge: the minimum-evidence gate follows the tools. Where
+	// none were offered, "you called no tools" is not a defect to retry.
 	if len(client.requests) != 1 {
 		t.Fatalf("context-free tier made %d calls, want 1", len(client.requests))
 	}
