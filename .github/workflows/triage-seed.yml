@@ -67,7 +67,6 @@ jobs:
         with:
           provider: anthropic
           model: claude-opus-4-8
-          base-url: ""
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           scope: full
           mode: baseline
