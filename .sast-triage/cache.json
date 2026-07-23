@@ -1,19 +1,4 @@
 {
   "version": 1,
-  "entries": {
-    "synthetic:4fe6c0467edb31027eebf2f8a41aa92bc3f7efe7b3914df94d5d4739b24b4b8b": {
-      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
-      "file": "internal/agent/openai.go",
-      "verdict": "benign",
-      "reason": "The only use of math/rand/v2 is rand.Int64N on line 265 to add jitter to a retry backoff delay. The output is a time.Duration used solely to desynchronize parallel retry attempts, never for any security-sensitive purpose such as token/id/key generation. Using crypto/rand here would be strictly worse (can block on entropy), and an attacker's ability to predict the jitter yields no security impact.",
-      "evidence": [
-        "internal/agent/openai.go:10",
-        "internal/agent/openai.go:256-266"
-      ],
-      "codeHash": "sha256:8f688d71422ac13b07ea89e2b5776b213c2b82c24ec8a98aecb945d6aa48ff23",
-      "model": "deepseek-v4-flash",
-      "decidedAt": "2026-07-23T11:04:20Z",
-      "tokensUsed": 25766
-    }
-  }
+  "entries": {}
 }
