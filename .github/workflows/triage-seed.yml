@@ -21,10 +21,10 @@ on:
         options:
           - deepseek-v4-flash
           - deepseek-v4-pro
-          - kimi-k3
           - kimi-k2.7-code
-          - claude-opus-4-8
+          - kimi-k3
           - claude-sonnet-5
+          - claude-opus-4-8
 
 concurrency:
   group: triage-seed
