@@ -65,7 +65,7 @@ jobs:
       - name: Triage
         uses: ./
         with:
-          provider: antropic
+          provider: anthropic
           model: claude-opus-4-8
           base-url: ""
           api-key: ${{ secrets.ANTHROPIC_API_KEY }}
