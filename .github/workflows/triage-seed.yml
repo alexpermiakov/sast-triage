@@ -14,15 +14,17 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: "Model to triage with, e.g. deepseek-v4-flash or claude-sonnet-5"
-        type: string
+        description: "Model to triage with — picks its endpoint and API key automatically"
+        type: choice
         required: true
-        default: deepseek-v4-flash
-      base_url:
-        description: "OpenAI-compatible endpoint — clear it to use Claude's native API instead"
-        type: string
-        required: false
-        default: https://api.deepseek.com/v1
+        default: deepseek-v4-pro
+        options:
+          - deepseek-v4-flash
+          - deepseek-v4-pro
+          - kimi-k3
+          - kimi-k2.7-code
+          - claude-opus-4-8
+          - claude-sonnet-5
 
 concurrency:
   group: triage-seed
@@ -36,22 +38,44 @@ jobs:
   seed:
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve provider
+      - name: Resolve endpoint and key
         id: llm
-        # Both dispatch inputs reach the shell as env vars and never as
-        # `${{ }}` inside the script. GitHub expands `${{ }}` BEFORE bash sees
-        # the line, so a model name of `x"; rm -rf $HOME; #` would be executed
-        # rather than printed. Same rule action.yml states for its own inputs.
+        # The model name is the only knob a maintainer turns; its API shape,
+        # endpoint and secret follow from it here. Three fields that have to
+        # agree is three chances to dispatch a run that points a DeepSeek key
+        # at Anthropic's API and burns a full-backlog triage on a 401.
+        #
+        # The input reaches the shell as an env var and never as `${{ }}`
+        # inside the script. GitHub expands `${{ }}` BEFORE bash sees the line,
+        # so a model name of `x"; rm -rf $HOME; #` would be executed rather
+        # than printed. Same rule action.yml states for its own inputs.
         env:
-          INPUT_BASE_URL: ${{ inputs.base_url }}
           INPUT_MODEL: ${{ inputs.model }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          # base-url alone selects the OpenAI-compatible path; empty means
-          # Claude's native API. Same inference the binary does, so neither is
-          # a default nobody chose.
-          if [ -n "$INPUT_BASE_URL" ]; then PROVIDER=openai; else PROVIDER=anthropic; fi
-          echo "provider=$PROVIDER" >> "$GITHUB_OUTPUT"
-          echo "seeding with $INPUT_MODEL via $PROVIDER"
+          set -euo pipefail
+          # An empty base_url selects Claude's native API — the same inference
+          # the binary does — so neither path is a default nobody chose.
+          case "$INPUT_MODEL" in
+            deepseek-*) provider=openai;    base_url=https://api.deepseek.com/v1; secret=DEEPSEEK_API_KEY ;;
+            kimi-*)     provider=openai;    base_url=https://api.moonshot.ai/v1;  secret=MOONSHOT_API_KEY ;;
+            claude-*)   provider=anthropic; base_url=;                            secret=ANTHROPIC_API_KEY ;;
+            *) echo "::error::unknown model '$INPUT_MODEL' — add its endpoint and secret to this case first"; exit 1 ;;
+          esac
+          # Fail here, not forty findings into the run: a missing secret is a
+          # repo-settings fix, and naming it saves the round trip.
+          if [ -z "${!secret}" ]; then
+            echo "::error::$INPUT_MODEL needs the $secret secret, which is not set on this repository"
+            exit 1
+          fi
+          {
+            echo "provider=$provider"
+            echo "base_url=$base_url"
+            echo "secret=$secret"
+          } >> "$GITHUB_OUTPUT"
+          echo "seeding with $INPUT_MODEL via $provider${base_url:+ at $base_url}"
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -65,9 +89,12 @@ jobs:
       - name: Triage
         uses: ./
         with:
-          provider: anthropic
-          model: claude-opus-4-8
-          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          provider: ${{ steps.llm.outputs.provider }}
+          model: ${{ inputs.model }}
+          base-url: ${{ steps.llm.outputs.base_url }}
+          # Indexed, not named: the secret follows the chosen model, and the
+          # resolve step has already failed the run if it is unset.
+          api-key: ${{ secrets[steps.llm.outputs.secret] }}
           scope: full
           mode: baseline
           cache-write: pr
