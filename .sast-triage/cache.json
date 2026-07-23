@@ -1,4 +1,48 @@
 {
   "version": 1,
-  "entries": {}
+  "entries": {
+    "synthetic:0fbbae0429f6dd5bd67ce72d371093a45f540f2bccce1cbb1d0d44f471fa4ac9": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "exploitable",
+      "reason": "The dependabot.yml configuration lacks a `cooldown` block under both package-ecosystem entries (gomod at lines 4-10, github-actions at lines 14-20). Without a cooldown period, Dependabot will propose updates to newly published package/action versions immediately, increasing exposure to supply-chain attacks where a malicious version is published and picked up before it can be flagged/pulled by the community. This matches the rule's exact detection criteria and the file confirms the absence of the recommended `cooldown: default-days: 7` block on the flagged github-actions entry (and the sibling gomod entry).",
+      "evidence": [
+        ".github/dependabot.yml:14-20",
+        ".github/dependabot.yml:4-10"
+      ],
+      "codeHash": "sha256:41eef2b97a7090b16fc3ec7b4a27842d32eaa8b0c06d9324ea6176575dabf7d4",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-23T23:06:46Z",
+      "tokensUsed": 4496
+    },
+    "synthetic:4fe6c0467edb31027eebf2f8a41aa92bc3f7efe7b3914df94d5d4739b24b4b8b": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "benign",
+      "reason": "math/rand/v2 is imported solely to add jitter to HTTP retry backoff delays (internal/agent/openai.go:278, used by backoff() at 272-279, called from the retry loop in post() at 180-200). This value only affects timing between retried HTTP requests to a chat-completions endpoint; it is never used to generate secrets, tokens, keys, or any security-relevant identifier, and no attacker-controlled data flows into or out of the rand call. Use of a non-cryptographic PRNG for retry jitter is not a security weakness.",
+      "evidence": [
+        "internal/agent/openai.go:10",
+        "internal/agent/openai.go:272-279",
+        "internal/agent/openai.go:180-200"
+      ],
+      "codeHash": "sha256:9e2f84d68e973329aa10560e9f2b8f71ea46e6bf1bb60f6aad5aaa066b5ecb2d",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-23T23:06:50Z",
+      "tokensUsed": 22004
+    },
+    "synthetic:a46b9fb36f28a5d90c3d72434c68c61d0d6f5bad48fc80961b2cee05656d809d": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "exploitable",
+      "reason": "The dependabot.yml configuration has no `cooldown` block under either package-ecosystem entry (gomod at lines 4-10, github-actions at lines 14-20). Without a cooldown period, Dependabot will propose updates to newly published package versions immediately, including versions published only seconds/minutes ago, which increases exposure to malicious or unstable packages (e.g., supply-chain attacks where a compromised maintainer account publishes a malicious version that gets auto-proposed before it can be detected/pulled). This matches the rule's flagged condition exactly; the configuration file confirms the absence of any `cooldown:` key anywhere in the file.",
+      "evidence": [
+        ".github/dependabot.yml:4-10",
+        ".github/dependabot.yml:14-20"
+      ],
+      "codeHash": "sha256:7b4e9f765a38516ce5cc74e4ea48b83aff4acb5f95d73b217fbad0bfaac939de",
+      "model": "claude-sonnet-5",
+      "decidedAt": "2026-07-23T23:06:45Z",
+      "tokensUsed": 4460
+    }
+  }
 }
