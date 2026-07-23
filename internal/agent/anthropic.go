@@ -50,14 +50,6 @@ func (a *AnthropicClient) Complete(ctx context.Context, req Request) (*Response,
 			InputSchema: anthropic.ToolInputSchemaParam{Properties: t.Properties, Required: t.Required},
 		}})
 	}
-	// Only set tool_choice when the loop demands a call ("any" = at least one
-	// tool this turn). Left unset otherwise, which the API reads as "auto" — the
-	// prior behaviour on every turn, so Claude's working path is unchanged except
-	// on the forced first turn.
-	if req.ForceToolUse && len(req.Tools) > 0 {
-		params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{}}
-	}
-
 	msg, err := a.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic messages.create: %w", err)

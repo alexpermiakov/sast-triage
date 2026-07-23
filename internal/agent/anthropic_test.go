@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -91,48 +90,6 @@ func TestAnthropicClientNeverSendsTemperature(t *testing.T) {
 		if _, ok := body[key]; ok {
 			t.Errorf("request carried %q; the current Claude models reject it with a 400", key)
 		}
-	}
-}
-
-// ForceToolUse sends tool_choice "any" (at least one call this turn); without
-// it the field is omitted, which the API reads as "auto" — Claude's prior
-// behaviour on every turn, unchanged except on the forced first turn.
-func TestAnthropicToolChoiceForcesToolUse(t *testing.T) {
-	var body map[string]json.RawMessage
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		raw, _ := io.ReadAll(r.Body)
-		body = nil
-		_ = json.Unmarshal(raw, &body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant",
-			"model":"claude-opus-4-8","content":[{"type":"text","text":"ok"}],
-			"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
-	}))
-	defer srv.Close()
-
-	tool := ToolDef{Name: "read_file", Properties: map[string]any{"path": map[string]any{"type": "string"}}, Required: []string{"path"}}
-	base := Request{
-		Model:     "claude-opus-4-8",
-		System:    "sys",
-		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hi"}}}},
-		Tools:     []ToolDef{tool},
-		MaxTokens: 16,
-	}
-
-	forced := base
-	forced.ForceToolUse = true
-	if _, err := NewAnthropicClient("k", srv.URL).Complete(context.Background(), forced); err != nil {
-		t.Fatalf("Complete (forced): %v", err)
-	}
-	if got := string(body["tool_choice"]); !strings.Contains(got, `"any"`) {
-		t.Errorf("ForceToolUse should send tool_choice any, got %q", got)
-	}
-
-	if _, err := NewAnthropicClient("k", srv.URL).Complete(context.Background(), base); err != nil {
-		t.Fatalf("Complete (auto): %v", err)
-	}
-	if _, ok := body["tool_choice"]; ok {
-		t.Errorf("without ForceToolUse tool_choice must be omitted, got %q", body["tool_choice"])
 	}
 }
 

@@ -126,12 +126,6 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 			Tools:       tools,
 			Temperature: t.cfg.Temperature,
 			MaxTokens:   t.cfg.MaxTokensPerCall,
-			// Require a tool call on the first turn only: guarantees the model
-			// opens the flagged region before it can verdict, then relaxes so
-			// later turns can end the loop. Guarded by len(tools) because the
-			// no-tools tiers must not demand a call they were offered no way to
-			// make.
-			ForceToolUse: i == 0 && len(tools) > 0,
 		})
 		if err != nil {
 			return Verdict{}, fmt.Errorf("triage finding %s: %w", f.Fingerprint, err)
