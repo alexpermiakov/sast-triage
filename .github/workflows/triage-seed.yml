@@ -68,7 +68,7 @@ jobs:
           provider: antropic
           model: claude-opus-4-8
           base-url: ""
-          openai-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           scope: full
           mode: baseline
           cache-write: pr
