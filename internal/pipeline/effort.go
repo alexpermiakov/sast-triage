@@ -23,7 +23,9 @@ func EffortPreset(name string) (Effort, error) {
 		return Effort{MaxReadLines: 200, MaxGrepMatches: 50, TokenBudget: 60000, MaxIterations: 10}, nil
 	case "large":
 		return Effort{MaxReadLines: 400, MaxGrepMatches: 100, TokenBudget: 120000, MaxIterations: 15}, nil
+	case "xlarge":
+		return Effort{MaxReadLines: 800, MaxGrepMatches: 200, TokenBudget: 240000, MaxIterations: 22}, nil
 	default:
-		return Effort{}, fmt.Errorf("unknown effort %q (want small, medium, or large)", name)
+		return Effort{}, fmt.Errorf("unknown effort %q (want small, medium, large, or xlarge)", name)
 	}
 }
