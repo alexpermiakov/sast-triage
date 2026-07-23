@@ -65,9 +65,9 @@ jobs:
       - name: Triage
         uses: ./
         with:
-          provider: ${{ steps.llm.outputs.provider }}
-          model: ${{ inputs.model }}
-          base-url: ${{ inputs.base_url }}
+          provider: antropic
+          model: claude-opus-4-8
+          base-url: ""
           openai-api-key: ${{ secrets.DEEPSEEK_API_KEY }}
           scope: full
           mode: baseline
