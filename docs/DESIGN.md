@@ -208,6 +208,23 @@ cache backend.
   30k/60k/120k/240k, iteration cap 6/10/15/22. Medium is the default; explicit
   `-token-budget`/`-max-iterations` override the preset. Tool descriptions
   advertise the active caps.
+- Temperature is 0 on both adapters, with **no flag and no action input**.
+  Triage is the one nondeterministic stage and its output does not stay in the
+  stage: a verdict is committed to `cache.json` and gates builds under `-mode
+  enforce`, so sampling variance becomes a verdict that flips between runs on
+  unchanged code and a cache diff nobody can reproduce. 0 is the closest this
+  stage gets to the determinism every other stage has by construction, which
+  makes it the only defensible value — exposing a knob would only invite a
+  worse one, and a per-provider `-model-param` passthrough was rejected for the
+  same reason plus its unvalidatable, undocumentable vendor-specific key names.
+- Reasoning models commonly reject an explicit temperature with a 400, so a
+  hard-coded 0 must not be a wall. `OpenAIClient` retries once without the
+  field, latches the decision for the run (atomic — parallel workers share the
+  client), and says so once on stderr. The match is narrow on purpose: 400 only,
+  body naming the parameter. Any other 4xx stays fatal, so a genuinely
+  malformed request is never laundered into a silent retry. `Request.Temperature`
+  is a `*float64` because "temperature 0" and "no temperature field" are
+  different requests and the fallback needs both expressible.
 - First prompt includes: rule background, finding message, flagged snippet, and
   the SARIF codeFlows trace as the starting map ("verify each hop"). The trace
   usually collapses the loop to 1–2 turns; the loop exists because required

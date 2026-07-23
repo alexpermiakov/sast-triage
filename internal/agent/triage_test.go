@@ -345,3 +345,25 @@ func TestTransportErrorPropagates(t *testing.T) {
 		t.Fatal("transport errors must propagate (caller reports uncertain but must not cache)")
 	}
 }
+
+// Temperature 0 is the default with nothing configured, and it must ride on
+// every call of a multi-turn loop, not just the first — a follow-up turn
+// sampled at the provider default (commonly 1) would leave the verdict as
+// unreproducible as never setting it.
+func TestTemperatureDefaultsToZeroOnEveryTurn(t *testing.T) {
+	client := &fakeClient{responses: []*Response{
+		toolUseResp("call_1", "read_file", map[string]any{"path": "app/handlers.go"}),
+		textResp(`{"verdict": "exploitable", "reason": "unsanitized", "evidence": ["app/handlers.go:17"]}`),
+	}}
+	if _, err := newTriager(t, client, Config{}).TriageFinding(context.Background(), sqliFinding(t)); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("requests = %d, want 2 (tool turn then verdict turn)", len(client.requests))
+	}
+	for i, req := range client.requests {
+		if req.Temperature == nil || *req.Temperature != 0 {
+			t.Errorf("request %d temperature = %v, want 0", i, req.Temperature)
+		}
+	}
+}
