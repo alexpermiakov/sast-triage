@@ -23,8 +23,14 @@ type Verdict struct {
 	Reason   string   `json:"reason"`
 	Evidence []string `json:"evidence"`
 
-	Tokens       Tokens `json:"-"`
-	ShortCircuit bool   `json:"-"` // decided by pure rule, no LLM call
+	Tokens Tokens `json:"-"`
+	// ToolCalls is how many read_file/grep_repo calls succeeded behind this
+	// verdict — the work the model did to earn it, counted separately from the
+	// tokens it spent doing so. Rejected calls do not count: an argument the
+	// executor refused returned no code, so it is not evidence. Zero on
+	// short-circuit and context-free verdicts, which are offered no tools.
+	ToolCalls    int  `json:"-"`
+	ShortCircuit bool `json:"-"` // decided by pure rule, no LLM call
 }
 
 // Tokens is the LLM spend behind one verdict, kept split rather than summed.
@@ -108,7 +114,9 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 
 	msgs := []Message{{Role: "user", Content: []Block{{Type: "text", Text: prompt}}}}
 	var tokens Tokens
+	var toolOK, toolFailed int
 	retried := false
+	nudged := false
 
 	for i := 0; i < maxIter; i++ {
 		resp, err := t.client.Complete(ctx, Request{
@@ -130,28 +138,50 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 			for _, c := range calls {
 				out, err := t.exec.Execute(c.Name, c.Input)
 				if err != nil {
+					toolFailed++
 					results = append(results, Block{Type: "tool_result", ToolUseID: c.ID, Text: err.Error(), IsError: true})
 					continue
 				}
+				toolOK++
 				results = append(results, Block{Type: "tool_result", ToolUseID: c.ID, Text: out})
 			}
 			msgs = append(msgs, Message{Role: "user", Content: results})
 		} else {
 			text := responseText(resp)
 			v, perr := parseVerdict(text)
-			if perr == nil {
-				v.Tokens = tokens
+			switch {
+			case perr == nil && (len(tools) == 0 || toolOK > 0):
+				v.Tokens, v.ToolCalls = tokens, toolOK
 				return t.validate(v, f), nil
+
+			// Minimum-evidence gate: a verdict reached without opening a single
+			// file is the model answering from the prompt — the snippet and the
+			// scanner's own trace — which is precisely the claim triage exists
+			// to check. Some providers also never emit tool calls at all
+			// (thinking-mode models that answer straight through, endpoints that
+			// accept the tools array and ignore it); that failure is otherwise
+			// silent, because the verdicts it produces look well-formed. Nudge
+			// once, then fail closed to uncertain rather than bank an unearned
+			// verdict. Never applies where no tools were offered.
+			case perr == nil && !nudged:
+				nudged = true
+				msgs = append(msgs,
+					Message{Role: "assistant", Content: []Block{{Type: "text", Text: text}}},
+					Message{Role: "user", Content: []Block{{Type: "text", Text: noEvidenceNudge}}},
+				)
+			case perr == nil:
+				return t.uncertain(f, tokens, toolOK, noEvidenceReason(toolFailed)), nil
+
+			case retried:
+				return t.uncertain(f, tokens, toolOK, "model did not produce a parseable verdict after retry"), nil
+			default:
+				retried = true
+				msgs = append(msgs,
+					Message{Role: "assistant", Content: []Block{{Type: "text", Text: text}}},
+					Message{Role: "user", Content: []Block{{Type: "text", Text: "That was not a valid verdict. Reply with ONLY the JSON object: " +
+						`{"verdict": "benign|exploitable|uncertain", "reason": "...", "evidence": ["path:line"]}`}}},
+				)
 			}
-			if retried {
-				return t.uncertain(f, tokens, "model did not produce a parseable verdict after retry"), nil
-			}
-			retried = true
-			msgs = append(msgs,
-				Message{Role: "assistant", Content: []Block{{Type: "text", Text: text}}},
-				Message{Role: "user", Content: []Block{{Type: "text", Text: "That was not a valid verdict. Reply with ONLY the JSON object: " +
-					`{"verdict": "benign|exploitable|uncertain", "reason": "...", "evidence": ["path:line"]}`}}},
-			)
 		}
 
 		// The budget gates continuing, not finishing. Every further call
@@ -159,11 +189,26 @@ func (t *Triager) TriageFinding(ctx context.Context, f sarif.Finding) (Verdict, 
 		// input again plus up to MaxTokensPerCall of output — stop before
 		// issuing a call that would blow the budget, not after.
 		if tokens.Total()+resp.InputTokens+t.cfg.MaxTokensPerCall > t.cfg.TokenBudget {
-			return t.uncertain(f, tokens, fmt.Sprintf("token budget exhausted (%d of %d tokens used; the next call would exceed the budget)", tokens.Total(), t.cfg.TokenBudget)), nil
+			return t.uncertain(f, tokens, toolOK, fmt.Sprintf("token budget exhausted (%d of %d tokens used; the next call would exceed the budget)", tokens.Total(), t.cfg.TokenBudget)), nil
 		}
 	}
 
-	return t.uncertain(f, tokens, fmt.Sprintf("iteration cap (%d) reached without a verdict", maxIter)), nil
+	return t.uncertain(f, tokens, toolOK, fmt.Sprintf("iteration cap (%d) reached without a verdict", maxIter)), nil
+}
+
+// noEvidenceNudge is the one retry the minimum-evidence gate spends. It names
+// the tools, because a model that skipped them may not have registered they
+// exist, and it re-states the bar rather than the format — the verdict it just
+// produced was well-formed, only unearned.
+const noEvidenceNudge = "You reached a verdict without reading any code: no read_file or grep_repo call was made. " +
+	"The snippet and taint trace in the prompt are the scanner's claim, not verification of it. " +
+	"Open the flagged region with read_file, follow the input with read_file/grep_repo, then reply with the verdict JSON."
+
+func noEvidenceReason(failed int) string {
+	if failed > 0 {
+		return fmt.Sprintf("verdict reached with no code read: all %d tool calls were rejected, and the model repeated the verdict when asked to gather evidence", failed)
+	}
+	return "verdict reached with no code read: the model made no read_file or grep_repo call, and repeated the verdict when asked to gather evidence"
 }
 
 // FlaggedRegion is the region the finding points at, used for codeHash.
@@ -217,7 +262,7 @@ func (t *Triager) validate(v Verdict, f sarif.Finding) Verdict {
 	switch v.Verdict {
 	case VerdictBenign, VerdictExploitable, VerdictUncertain:
 	default:
-		return t.uncertain(f, v.Tokens, fmt.Sprintf("model returned unknown verdict %q", v.Verdict))
+		return t.uncertain(f, v.Tokens, v.ToolCalls, fmt.Sprintf("model returned unknown verdict %q", v.Verdict))
 	}
 
 	var valid, invalid []string
@@ -231,10 +276,10 @@ func (t *Triager) validate(v Verdict, f sarif.Finding) Verdict {
 
 	if v.Verdict == VerdictBenign {
 		if len(invalid) > 0 {
-			return t.uncertain(f, v.Tokens, fmt.Sprintf("benign verdict cited unverifiable evidence %v — evidence bar not met", invalid))
+			return t.uncertain(f, v.Tokens, v.ToolCalls, fmt.Sprintf("benign verdict cited unverifiable evidence %v — evidence bar not met", invalid))
 		}
 		if len(valid) == 0 {
-			return t.uncertain(f, v.Tokens, "benign verdict cited no evidence — evidence bar not met")
+			return t.uncertain(f, v.Tokens, v.ToolCalls, "benign verdict cited no evidence — evidence bar not met")
 		}
 	}
 	v.Evidence = valid
@@ -252,11 +297,12 @@ func (t *Triager) checkRef(ref string) bool {
 	return err == nil
 }
 
-func (t *Triager) uncertain(f sarif.Finding, tokens Tokens, reason string) Verdict {
+func (t *Triager) uncertain(f sarif.Finding, tokens Tokens, toolCalls int, reason string) Verdict {
 	return Verdict{
-		Verdict: VerdictUncertain,
-		Reason:  reason,
-		Tokens:  tokens,
+		Verdict:   VerdictUncertain,
+		Reason:    reason,
+		Tokens:    tokens,
+		ToolCalls: toolCalls,
 	}
 }
 

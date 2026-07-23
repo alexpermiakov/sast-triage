@@ -184,9 +184,9 @@ func main() {
 	if *scopeMode == scope.Diff {
 		scoped = fmt.Sprintf(" [diff scope vs %s: %d of %d scanned findings]", *baseRef, s.Total, s.Scanned)
 	}
-	fmt.Printf("triaged %d findings: %d benign, %d exploitable, %d uncertain (%d cached, %d new, %d deferred, %d tokens, %d issues filed, %d PR comments)%s\n",
+	fmt.Printf("triaged %d findings: %d benign, %d exploitable, %d uncertain (%d cached, %d new, %d deferred, %d tokens, %d tool calls, %d issues filed, %d PR comments)%s\n",
 		s.Total, s.Benign, s.Exploitable, s.Uncertain, s.Cached, s.Fresh, s.Deferred,
-		s.TokensUsed, s.IssuesFiled, s.CommentsPosted, scoped)
+		s.TokensUsed, s.ToolCalls, s.IssuesFiled, s.CommentsPosted, scoped)
 
 	fail, msg := pipeline.Gate(*mode, s)
 	if msg != "" {

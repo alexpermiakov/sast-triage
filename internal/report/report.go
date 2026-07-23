@@ -29,7 +29,12 @@ type Item struct {
 	Deferred     bool // run budget exhausted before this finding was triaged
 	TokensIn     int
 	TokensOut    int
-	IssueRef     int
+	// ToolCalls is how much code the model read to reach this verdict, tracked
+	// alongside the tokens it spent: a run whose verdicts cost tokens but made
+	// no tool calls is a provider silently ignoring the tools, which no token
+	// count shows. Zero on cached and short-circuit items, like the tokens.
+	ToolCalls int
+	IssueRef  int
 }
 
 // Options controls rendering. LinkBase, when set, turns file:line references
