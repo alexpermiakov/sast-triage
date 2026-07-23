@@ -86,7 +86,10 @@ scan, and their line numbers are pinned to unit tests.
   successful tool calls gets one nudge, then `uncertain`. Rejected calls are not
   evidence. Exempt: the context-free and short-circuit tiers, which are offered
   no tools. Tool calls per finding are logged next to tokens — a provider that
-  ignores the `tools` array is invisible in a token count.
+  ignores the `tools` array is invisible in a token count. `tool_choice` is left
+  `auto` on every turn: a straight-to-verdict model (Kimi K3 at `reasoning_effort`
+  max) that makes no call is caught by the nudge, then failed closed to
+  `uncertain`.
 - **Bounded loop**: hard iteration cap (default 10) and token budget per finding;
   run-level `--max-findings-budget` cap. No unbounded loops anywhere.
 - **Nondeterminism is quarantined in `internal/agent`**. Every other package is

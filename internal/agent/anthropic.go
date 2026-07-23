@@ -50,7 +50,6 @@ func (a *AnthropicClient) Complete(ctx context.Context, req Request) (*Response,
 			InputSchema: anthropic.ToolInputSchemaParam{Properties: t.Properties, Required: t.Required},
 		}})
 	}
-
 	msg, err := a.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic messages.create: %w", err)

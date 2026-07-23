@@ -243,6 +243,20 @@ cache backend.
   context-free and short-circuit tiers, offered none, are exempt. Uncertain
   verdicts are gated too: one rule, no exceptions to reason about, and "you gave
   up before reading anything" is worth one retry.
+- First-turn tool call is forced, not merely nudged after the fact: when tools
+  are offered, the opening turn sets `tool_choice` to "required" (OpenAI) / "any"
+  (Anthropic), then relaxes to auto/omitted so later turns can emit the verdict.
+  The gate above catches an evidence-free verdict *after* a wasted call; this
+  prevents the wasted call for a whole class of model. It was added for Kimi K3,
+  whose default `reasoning_effort` "max" reasons straight to a verdict and never
+  reaches for a tool under "auto" — the nudge alone left 13 of 16 findings
+  uncertain. It is provider-agnostic on purpose (not a K3 special-case, which
+  would be the per-model allowlist the temperature note rejects): forcing the
+  first call only strengthens the same evidence bar for every model, and Claude,
+  which already reads on turn 1, is unaffected. Guarded by "tools were offered",
+  so the context-free and short-circuit tiers never demand a call they were given
+  no tool to make. `Request.ForceToolUse` carries the intent; each adapter maps
+  it to its own wire form.
 - Tool calls per finding are reported next to tokens (per-finding log line, run
   summary). Tokens alone cannot distinguish a run that read the code from one
   that never opened a file; the pair is what makes a provider swap auditable.

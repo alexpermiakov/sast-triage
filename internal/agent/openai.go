@@ -41,6 +41,15 @@ type OpenAIClient struct {
 	// client. log receives the one-line notice.
 	dropTemp atomic.Bool
 	log      io.Writer
+
+	// debug dumps each raw request/response pair to log when
+	// SAST_TRIAGE_DEBUG_HTTP is set. Diagnostic only: it reveals whether an
+	// endpoint returned tool_calls in the standard place, put them somewhere
+	// nonstandard (reasoning_content, text), or made none at all — the
+	// distinction a token count alone cannot show. The request body carries no
+	// secret (the API key is an Authorization header), but the response can be
+	// large, so it is off by default.
+	debug bool
 }
 
 // NewOpenAIClient targets baseURL (e.g. http://localhost:11434/v1 for Ollama).
@@ -69,6 +78,7 @@ func NewOpenAIClient(baseURL, apiKey string, parallel int) *OpenAIClient {
 		maxDelay:   60 * time.Second,
 		sleep:      sleepCtx,
 		log:        os.Stderr,
+		debug:      os.Getenv("SAST_TRIAGE_DEBUG_HTTP") != "",
 	}
 }
 
@@ -228,6 +238,9 @@ func (c *OpenAIClient) attempt(ctx context.Context, buf []byte) (oaiAttempt, err
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
 		return oaiAttempt{}, fmt.Errorf("openai read response: %w", err)
+	}
+	if c.debug {
+		fmt.Fprintf(c.log, "sast-triage debug: POST %s/chat/completions\n--- request ---\n%s\n--- response %s ---\n%s\n", c.baseURL, buf, res.Status, raw)
 	}
 	return oaiAttempt{body: raw, code: res.StatusCode, status: res.Status, header: res.Header}, nil
 }

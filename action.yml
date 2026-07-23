@@ -183,6 +183,12 @@ runs:
       id: triage
       shell: bash
       env:
+        # Dogfood only: dump raw provider request/response pairs when this repo
+        # runs the action on itself (`uses: ./`, action path inside the
+        # workspace). Empty — off — for every external consumer, so their CI
+        # logs never grow the raw bodies. Diagnostic for the Kimi zero-tool-call
+        # investigation; drop once that is resolved.
+        SAST_TRIAGE_DEBUG_HTTP: ${{ startsWith(github.action_path, github.workspace) && '1' || '' }}
         INPUT_PROVIDER: ${{ inputs.provider }}
         INPUT_MODEL: ${{ inputs.model }}
         INPUT_BASE_URL: ${{ inputs.base-url }}
