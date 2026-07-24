@@ -13,6 +13,8 @@ jobs:
       attestations: write # store the signed provenance on the repo, so `gh attestation verify` can find it
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # full history + tags: Publish resolves the previous release tag
 
       - name: Verify action.yml pins this release
         env:
@@ -56,9 +58,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
+          set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
-          else
-            gh release create "$TAG" dist/* --generate-notes
+            exit 0
           fi
+          # Left to itself, --generate-notes diffs against the newest tag on the
+          # commit, which is the floating `v1` alias — same commit, so an empty
+          # changelog. Ask for the previous x.y.z tag explicitly. --match skips
+          # the alias; ${TAG}^ starts the search below this release, so re-running
+          # a tag never diffs it against itself. Empty on the first release, where
+          # --notes-start-tag is simply omitted.
+          PREV=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' "${TAG}^" 2>/dev/null || true)
+          notes=(--generate-notes)
+          if [ -n "$PREV" ]; then
+            echo "generating notes from $PREV to $TAG"
+            notes+=(--notes-start-tag "$PREV")
+          else
+            echo "::notice::no earlier release tag found; notes cover the full history"
+          fi
+          gh release create "$TAG" dist/* "${notes[@]}"
 
