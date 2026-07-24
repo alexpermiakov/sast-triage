@@ -90,6 +90,92 @@ func TestOpenAIToolCallRoundTrip(t *testing.T) {
 	}
 }
 
+// An endpoint serving Kimi without the tool-call parser returns the calls as
+// delimiter tokens in content with an empty tool_calls array. Complete must
+// recover them as tool_use blocks — otherwise the loop reads the turn as a
+// straight-to-verdict answer and the minimum-evidence gate nudges a model that
+// did try to call a tool.
+func TestOpenAIKimiToolCallFallback(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant",
+			"content":"Let me check.<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{\"path\":\"a.go\"}<|tool_call_end|><|tool_calls_section_end|>",
+			"tool_calls":[]}}],"usage":{"prompt_tokens":5,"completion_tokens":9}}`)
+	}))
+	defer srv.Close()
+
+	resp, err := NewOpenAIClient(srv.URL, "k", 1).Complete(context.Background(), Request{
+		Model:     "kimi-k3",
+		MaxTokens: 128,
+		Tools:     []ToolDef{{Name: "read_file", Properties: map[string]any{"path": map[string]any{"type": "string"}}, Required: []string{"path"}}},
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "triage"}}}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	calls := toolCalls(resp)
+	if len(calls) != 1 || calls[0].Name != "read_file" || calls[0].ID != "functions.read_file:0" {
+		t.Fatalf("Kimi tool call not recovered: %+v", resp.Content)
+	}
+	var args struct{ Path string }
+	if err := json.Unmarshal(calls[0].Input, &args); err != nil || args.Path != "a.go" {
+		t.Errorf("args not parsed: %s (%v)", calls[0].Input, err)
+	}
+	if resp.StopReason != "tool_use" {
+		t.Errorf("StopReason = %q, want tool_use once calls are recovered", resp.StopReason)
+	}
+	if txt := responseText(resp); txt != "Let me check." {
+		t.Errorf("markup not stripped from text: %q", txt)
+	}
+}
+
+func TestParseKimiToolCalls(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		wantNames []string
+		wantText  string
+	}{
+		{
+			name:      "no tokens is untouched",
+			content:   "just a verdict, no tools",
+			wantNames: nil,
+			wantText:  "just a verdict, no tools",
+		},
+		{
+			name: "two calls, prose stripped",
+			content: "thinking<|tool_calls_section_begin|>" +
+				`<|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path":"a.go"}<|tool_call_end|>` +
+				`<|tool_call_begin|>functions.grep_repo:1<|tool_call_argument_begin|>{"pattern":"x"}<|tool_call_end|>` +
+				"<|tool_calls_section_end|>",
+			wantNames: []string{"read_file", "grep_repo"},
+			wantText:  "thinking",
+		},
+		{
+			name: "truncated final call is dropped, first kept",
+			content: "<|tool_calls_section_begin|>" +
+				`<|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>{"path":"a.go"}<|tool_call_end|>` +
+				`<|tool_call_begin|>functions.grep_repo:1<|tool_call_argument_begin|>{"pattern":`,
+			wantNames: []string{"read_file"},
+			wantText:  "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls, text := parseKimiToolCalls(tt.content)
+			var names []string
+			for _, c := range calls {
+				names = append(names, c.Name)
+			}
+			if !slices.Equal(names, tt.wantNames) {
+				t.Errorf("names = %v, want %v", names, tt.wantNames)
+			}
+			if text != tt.wantText {
+				t.Errorf("text = %q, want %q", text, tt.wantText)
+			}
+		})
+	}
+}
+
 // A user turn carrying tool_result blocks must become standalone role:"tool"
 // messages keyed by tool_call_id — OpenAI's shape, not Anthropic's.
 func TestOpenAIToolResultBecomesToolRole(t *testing.T) {

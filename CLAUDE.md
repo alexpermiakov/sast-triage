@@ -38,7 +38,11 @@ internal/
                      usage error, never a default, so the tool only talks to an
                      endpoint the operator named or an API they asked for by
                      name. -base-url is honoured on both paths, never silently
-                     dropped.
+                     dropped. openai.go also recovers Kimi K2/K3 tool calls
+                     emitted as delimiter tokens in message content (endpoints
+                     served without the kimi_k2 tool-call parser leave the
+                     tool_calls array empty) — parsed only when that array is
+                     empty, so a compliant endpoint is never second-guessed.
   report/            triage-report.md rendering, GitHub issue + PR comment bodies
   github/            minimal Issues + PR-review REST client (issue dedupe owned
                      by cache issueRef; comment dedupe by fingerprint marker)
