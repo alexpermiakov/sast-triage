@@ -147,8 +147,23 @@ func (c *OpenAIClient) Complete(ctx context.Context, req Request) (*Response, er
 		InputTokens:  out.Usage.PromptTokens,
 		OutputTokens: out.Usage.CompletionTokens,
 	}
-	if msg.Content != "" {
-		resp.Content = append(resp.Content, Block{Type: "text", Text: msg.Content})
+
+	// Kimi fallback: an endpoint serving Kimi without its tool-call parser
+	// enabled returns tool calls as delimiter tokens inside content, leaving
+	// tool_calls empty. Recover them by hand so those calls are not mistaken for
+	// a straight-to-verdict answer. Guarded by an empty structured array so a
+	// compliant endpoint is never second-guessed.
+	content := msg.Content
+	var kimiCalls []Block
+	if len(msg.ToolCalls) == 0 {
+		kimiCalls, content = parseKimiToolCalls(content)
+	}
+	if content != "" {
+		resp.Content = append(resp.Content, Block{Type: "text", Text: content})
+	}
+	if len(kimiCalls) > 0 {
+		resp.StopReason = "tool_use" // the finish_reason was "stop"; the calls say otherwise
+		resp.Content = append(resp.Content, kimiCalls...)
 	}
 	for _, tc := range msg.ToolCalls {
 		resp.Content = append(resp.Content, Block{
@@ -364,6 +379,95 @@ func toOpenAIMessages(req Request) []oaiMessage {
 // normalizeToolArgs returns the tool arguments as raw JSON. OpenAI specifies
 // arguments as a JSON-encoded string, but some compatible servers (Ollama has,
 // across versions) return a bare object; accept both.
+// Kimi K2/K3 tool-call delimiters. When an OpenAI-compatible endpoint serves
+// Kimi without the matching tool-call parser (vLLM/SGLang
+// --tool-call-parser kimi_k2), the model's calls arrive as these raw tokens in
+// message content instead of the structured tool_calls array. Moonshot documents
+// parsing them by hand; parseKimiToolCalls does exactly that.
+// Ref: github.com/MoonshotAI/Kimi-K2/blob/main/docs/tool_call_guidance.md
+const (
+	kimiSectionBegin = "<|tool_calls_section_begin|>"
+	kimiSectionEnd   = "<|tool_calls_section_end|>"
+	kimiCallBegin    = "<|tool_call_begin|>"
+	kimiCallEnd      = "<|tool_call_end|>"
+	kimiArgBegin     = "<|tool_call_argument_begin|>"
+)
+
+// parseKimiToolCalls recovers tool calls emitted as Kimi delimiter tokens,
+// returning them as tool_use blocks plus content with the tool-call markup
+// removed. Each call is
+// `<|tool_call_begin|>functions.{name}:{idx}<|tool_call_argument_begin|>{json}<|tool_call_end|>`.
+// Content without the tokens returns (nil, content unchanged), so "no Kimi calls"
+// and "not a Kimi endpoint" are indistinguishable to the caller. A truncated
+// final call (no end token) is dropped rather than guessed at.
+func parseKimiToolCalls(content string) (calls []Block, text string) {
+	if !strings.Contains(content, kimiCallBegin) {
+		return nil, content
+	}
+	rest := content
+	for {
+		i := strings.Index(rest, kimiCallBegin)
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len(kimiCallBegin):]
+		j := strings.Index(rest, kimiCallEnd)
+		if j < 0 {
+			break // unterminated call: truncated output, keep what parsed cleanly
+		}
+		inner := rest[:j]
+		rest = rest[j+len(kimiCallEnd):]
+
+		id, args, ok := strings.Cut(inner, kimiArgBegin)
+		if !ok {
+			continue // no argument delimiter: not a call this can execute
+		}
+		name := strings.TrimSpace(id)
+		if k := strings.Index(name, "."); k >= 0 { // drop the "functions." namespace
+			name = name[k+1:]
+		}
+		if k := strings.LastIndex(name, ":"); k >= 0 { // drop the ":idx" suffix
+			name = name[:k]
+		}
+		if name == "" {
+			continue
+		}
+		calls = append(calls, Block{
+			Type:  "tool_use",
+			ID:    strings.TrimSpace(id),
+			Name:  name,
+			Input: normalizeToolArgs(json.RawMessage(strings.TrimSpace(args))),
+		})
+	}
+	return calls, stripKimiSection(content)
+}
+
+// stripKimiSection removes the tool-call markup from content, leaving any prose
+// the model emitted alongside it. It prefers the section wrapper and falls back
+// to the span between the first call-begin and last call-end when the wrapper is
+// absent or the output was truncated mid-section.
+func stripKimiSection(content string) string {
+	// Section wrapper present: cut exactly it when it closed, or to end-of-string
+	// when it did not — an unclosed wrapper means the output was truncated
+	// mid-section, so everything after it is (partial) markup.
+	if start := strings.Index(content, kimiSectionBegin); start >= 0 {
+		if end := strings.LastIndex(content, kimiSectionEnd); end >= 0 {
+			return strings.TrimSpace(content[:start] + content[end+len(kimiSectionEnd):])
+		}
+		return strings.TrimSpace(content[:start])
+	}
+	// No wrapper, bare call tokens: cut from the first call-begin to the last
+	// call-end, or to end-of-string if even that was truncated away.
+	start := strings.Index(content, kimiCallBegin)
+	if start < 0 {
+		return content
+	}
+	if end := strings.LastIndex(content, kimiCallEnd); end >= 0 {
+		return strings.TrimSpace(content[:start] + content[end+len(kimiCallEnd):])
+	}
+	return strings.TrimSpace(content[:start])
+}
+
 func normalizeToolArgs(raw json.RawMessage) json.RawMessage {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
