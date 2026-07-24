@@ -1,6 +1,38 @@
 {
   "version": 1,
   "entries": {
+    "synthetic:0fbbae0429f6dd5bd67ce72d371093a45f540f2bccce1cbb1d0d44f471fa4ac9": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "benign",
+      "reason": "The finding flags a missing `cooldown` block in `.github/dependabot.yml`, but this is a static configuration file committed by repository maintainers — it does not accept or process any attacker-controlled input. No code in the repository dynamically generates or modifies this file. Without an attacker being able to influence the configuration itself, the absence of a cooldown is not exploitable; the cooldown is a defense-in-depth best practice, not a security boundary. Additionally, no auto-merge automation exists for Dependabot PRs (verified via CI workflows), so human review remains the actual control gate.",
+      "evidence": [
+        ".github/dependabot.yml:1-20",
+        ".github/workflows/ci.yml:1-27"
+      ],
+      "codeHash": "sha256:ee8a83d45a6d13c32e0583b8aa89478e99c2be696c214f66ee59ec21e6d9da02",
+      "model": "deepseek-v4-flash",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-24T12:51:43Z",
+      "tokensUsed": 36527
+    },
+    "synthetic:4d37171025e51f08cf8758203b01fc40473041647fe3ed6e9e8767c9b90b40f1": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "benign",
+      "reason": "The only use of math/rand/v2 is on line 248, where it adds jitter to the retry backoff delay (half + rand.Int64N(...)). This is a non-security, non-cryptographic purpose: the random value prevents parallel workers from retrying in lockstep after a rate-limit response. No secret, token, or attacker-influenceable value is derived from the PRNG, so using math/rand (which is faster and simpler) is appropriate and safe. crypto/rand is not needed here.",
+      "evidence": [
+        "internal/agent/openai.go:9",
+        "internal/agent/openai.go:242-249"
+      ],
+      "codeHash": "sha256:34a148e1f966ff9ab58985f0d09021468f8c8336a0a8bb9e23a51bdcf59575c5",
+      "model": "deepseek-v4-flash",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-24T12:51:17Z",
+      "tokensUsed": 26544
+    },
     "synthetic:4fe6c0467edb31027eebf2f8a41aa92bc3f7efe7b3914df94d5d4739b24b4b8b": {
       "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
       "file": "internal/agent/openai.go",
@@ -11,6 +43,21 @@
       "model": "deepseek-v4-flash",
       "decidedAt": "2026-07-23T23:06:27Z",
       "tokensUsed": 55936
+    },
+    "synthetic:a46b9fb36f28a5d90c3d72434c68c61d0d6f5bad48fc80961b2cee05656d809d": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "benign",
+      "reason": "The flagged dependabot.yml is a static configuration file under sole control of repository maintainers. There is no attacker-controlled input that reaches this file at runtime — it is only modified via commits (requiring write access or PR review). No workflow or automation dynamically writes to this file. The missing `cooldown` block is a configuration hardening recommendation, not an exploitable code path.",
+      "evidence": [
+        ".github/dependabot.yml:1-20"
+      ],
+      "codeHash": "sha256:9b2225721ee61a50d5b33a9ca46e506df9c43d32749c3d3930973466a3697875",
+      "model": "deepseek-v4-flash",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-24T12:51:24Z",
+      "tokensUsed": 13839
     }
   }
 }
