@@ -1,9 +1,3 @@
-# Composite action wrapping the sast-triage binary. Remote use downloads the
-# prebuilt binary for the pinned release, verified by sha256 + build provenance;
-# a local checkout (`uses: ./`, the dogfood workflow) compiles the working tree
-# instead. Either way the ref you pin determines the code that runs. Inputs
-# mirror the CLI flags one-to-one (flag `-base-url` → input `base-url`); logic
-# stays in the Go binary, this file only maps inputs to flags.
 name: SAST Triage
 description: >-
   Triage SAST findings (SARIF 2.1.0) with a bounded LLM agent and an evidence-keyed verdict cache.
@@ -117,15 +111,10 @@ inputs:
 runs:
   using: composite
   steps:
-    # Local checkout (`uses: ./`, this repo's dogfood workflow): the action path
-    # sits inside the workspace, so compile the working tree — a dogfood run must
-    # exercise the code under review, never the last release.
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       if: startsWith(github.action_path, github.workspace)
       with:
         go-version: stable
-        # go.sum lives in the action path, outside the workspace on remote use,
-        # where setup-go's cache glob cannot see it.
         cache: false
 
     - name: Build sast-triage from the local checkout
@@ -133,20 +122,11 @@ runs:
       shell: bash
       run: go build -C "$GITHUB_ACTION_PATH" -o "$RUNNER_TEMP/sast-triage" ./cmd/sast-triage
 
-    # Remote use (`uses: alexpermiakov/sast-triage@<ref>`): download the prebuilt
-    # binary instead of installing Go and compiling (~20s -> ~2s).
-    #
-    # SAST_TRIAGE_VERSION must be bumped in the same commit that gets tagged, so
-    # the pinned ref and the binary it fetches are the same release. Two checks
-    # stand in for compiling the source yourself: the sha256 from the release's
-    # checksums.txt, and the build provenance attestation, which proves this repo's
-    # release workflow produced the binary from this tag. Both are fatal on
-    # mismatch — a security tool does not run an unverified binary.
     - name: Download the pinned sast-triage release binary
       if: ${{ !startsWith(github.action_path, github.workspace) }}
       shell: bash
       env:
-        SAST_TRIAGE_VERSION: v1.2.10
+        SAST_TRIAGE_VERSION: v1.2.11
         SAST_TRIAGE_REPO: alexpermiakov/sast-triage
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
@@ -177,17 +157,10 @@ runs:
         mv "$RUNNER_TEMP/$asset" "$RUNNER_TEMP/sast-triage"
         chmod +x "$RUNNER_TEMP/sast-triage"
 
-    # Inputs reach the shell only via env (never interpolated into the script),
-    # so a hostile model/base-url string cannot inject commands.
     - name: Triage
       id: triage
       shell: bash
       env:
-        # Dogfood only: dump raw provider request/response pairs when this repo
-        # runs the action on itself (`uses: ./`, action path inside the
-        # workspace). Empty — off — for every external consumer, so their CI
-        # logs never grow the raw bodies. Diagnostic for the Kimi zero-tool-call
-        # investigation; drop once that is resolved.
         SAST_TRIAGE_DEBUG_HTTP: ${{ startsWith(github.action_path, github.workspace) && '1' || '' }}
         INPUT_PROVIDER: ${{ inputs.provider }}
         INPUT_MODEL: ${{ inputs.model }}
@@ -281,14 +254,6 @@ runs:
         echo "exit-code=$rc" >> "$GITHUB_OUTPUT"
         if [ "$rc" != 0 ] && [ "$rc" != 3 ]; then exit "$rc"; fi
 
-    # Never bot-PR the cache onto a protected branch: on a PR run the delta is
-    # committed to the PR's own head branch, so it arrives on main through the
-    # normal merge everyone already reviews. `pr` exists for seeding only, where
-    # there is no branch of your own to commit to.
-    #
-    # Pushing with GITHUB_TOKEN is deliberate: pushes made with it do not
-    # retrigger workflows, so the cache commit cannot start the run that would
-    # write the next cache commit.
     - name: Commit the cache delta
       if: ${{ always() && inputs.cache-write != 'none' }}
       shell: bash
@@ -360,9 +325,6 @@ runs:
         echo "::error::unknown cache-write value '$INPUT_CACHE_WRITE' (want branch, pr or none)"
         exit 1
 
-    # The gate, re-raised after every output has been written and the cache
-    # committed. A failing check with no report attached is a check people learn
-    # to ignore.
     - name: Gate
       if: ${{ always() && steps.triage.outputs.exit-code == '3' }}
       shell: bash

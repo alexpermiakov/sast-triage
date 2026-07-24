@@ -53,11 +53,10 @@ func TestAnthropicClientHonoursBaseURL(t *testing.T) {
 	}
 }
 
-// The native API removed the sampling parameters on the current Claude
-// generation: Opus 4.8/4.7, Sonnet 5 and Fable 5 answer temperature, top_p or
-// top_k with a 400. The loop still asks for temperature 0 (the OpenAI adapter
-// needs it), so this adapter must drop it — sending it failed every call, and a
-// run that fails every call reports zero findings triaged with no other signal.
+// The project sends no sampling parameters on any provider, and the native API
+// would reject them anyway: Opus 4.8/4.7, Sonnet 5 and Fable 5 answer
+// temperature, top_p or top_k with a 400. This guards against a regression that
+// reintroduces one on the Anthropic path.
 func TestAnthropicClientNeverSendsTemperature(t *testing.T) {
 	var body map[string]json.RawMessage
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,13 +74,11 @@ func TestAnthropicClientNeverSendsTemperature(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	zero := 0.0
 	if _, err := NewAnthropicClient("k", srv.URL).Complete(context.Background(), Request{
-		Model:       "claude-opus-4-8",
-		System:      "sys",
-		Messages:    []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hi"}}}},
-		Temperature: &zero, // what the Triager sends on every call
-		MaxTokens:   16,
+		Model:     "claude-opus-4-8",
+		System:    "sys",
+		Messages:  []Message{{Role: "user", Content: []Block{{Type: "text", Text: "hi"}}}},
+		MaxTokens: 16,
 	}); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}

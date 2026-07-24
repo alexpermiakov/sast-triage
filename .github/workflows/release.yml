@@ -1,10 +1,5 @@
 name: Release
 
-# Cross-compiles the binaries that action.yml downloads. Fires on version tags;
-# the tagged commit must already carry the matching SAST_TRIAGE_VERSION in
-# action.yml (see the comment there) or consumers of that tag will fetch assets
-# from a different release than the action code they pinned. That is enforced
-# below rather than remembered — see "Verify action.yml pins this release".
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -23,15 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # The one failure this repo cannot detect at runtime: action.yml downloads
-      # the release named by SAST_TRIAGE_VERSION, so if the tagged commit still
-      # carries the PREVIOUS version, `uses: ...@v1.2.1` silently runs the
-      # v1.2.0 binary. The flags moved between those, so it dies with "flag
-      # provided but not defined" in every consumer's CI at once.
-      #
-      # Failing the release is the cheap end of that: the tag exists, no assets
-      # are published under it, and the fix is one line plus a re-tag. Bumping
-      # the constant is still manual; forgetting it is no longer shippable.
       - name: Verify action.yml pins this release
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -54,10 +40,6 @@ jobs:
         with:
           go-version: stable
 
-      # One runner cross-compiles every target: pure-Go, CGO off, so there is no
-      # toolchain to install per platform. -trimpath keeps the build reproducible
-      # (no runner-local paths baked into the binary), which is what makes the
-      # attestation below worth checking.
       - name: Build
         run: |
           mkdir -p dist
@@ -70,9 +52,6 @@ jobs:
           (cd dist && sha256sum sast-triage_* > checksums.txt)
           cat dist/checksums.txt
 
-      # Binds each binary to this repo, workflow and commit. action.yml verifies
-      # it at download, so a release asset swapped after the fact fails the run
-      # rather than silently executing.
       - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: dist/sast-triage_*
@@ -87,3 +66,4 @@ jobs:
           else
             gh release create "$TAG" dist/* --generate-notes
           fi
+

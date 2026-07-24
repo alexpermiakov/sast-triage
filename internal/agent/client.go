@@ -36,23 +36,11 @@ type ToolDef struct {
 
 // Request is one model call.
 type Request struct {
-	Model    string
-	System   string
-	Messages []Message
-	Tools    []ToolDef
-	// Temperature is the sampling randomness, 0 in every production call: a
-	// verdict is committed to the cache and gates builds, so one that flips
-	// between runs on unchanged code is a defect, not variety. nil means "send
-	// no temperature field at all" — a distinct request, not the same as 0,
-	// and the shape reasoning models that reject the parameter need. Adapters
-	// fall back to it on their own; nothing above them chooses.
-	//
-	// Honoured by the OpenAI-compatible adapter only. The native Anthropic API
-	// removed the sampling parameters on the current Claude generation and
-	// answers any of them with a 400, so anthropic.go drops this field rather
-	// than failing every call; steer that provider with the prompt and -effort.
-	Temperature *float64
-	MaxTokens   int
+	Model     string
+	System    string
+	Messages  []Message
+	Tools     []ToolDef
+	MaxTokens int
 }
 
 // Response is the model's reply plus token accounting for the budget.
