@@ -46,6 +46,23 @@ inputs:
       in scope), report (advisory), or baseline (triage everything, gate nothing —
       seeding a fresh cache).
     default: enforce
+  fail-on:
+    description: >-
+      Which verdict classes fail the build when mode is enforce: "exploitable"
+      (the default), or "exploitable,uncertain" to fail on findings triage could
+      not resolve either. Findings deferred by the run budget never gate — that
+      is the tool running out of time, not a claim about your code.
+    default: exploitable
+  no-suppress-cwe:
+    description: >-
+      CWE classes the agent may not dismiss as benign, comma-separated (e.g.
+      "CWE-502,CWE-611"). A benign verdict on these is recorded as uncertain and
+      stays visible instead of suppressing the finding. Empty (the default) bars
+      nothing. A value that is not a CWE id fails the run rather than being
+      ignored, because a list that matches nothing looks exactly like a repo
+      with nothing to find. Measured starting point, if you want one:
+      "CWE-78,CWE-327,CWE-328,CWE-501,CWE-614".
+    default: ""
   cache-write:
     description: >-
       What to do with the updated cache: branch (commit to the branch being built —
@@ -92,8 +109,10 @@ inputs:
     default: "false"
   pr-comments:
     description: >-
-      Post exploitable verdicts as inline comments on the PR diff (needs
-      pull-requests: write). Auto-detects the PR number on pull_request triggers.
+      Post exploitable verdicts as inline comments on the PR diff, and one
+      conversation comment listing what this change proposes to suppress and
+      linking the cache diff (needs pull-requests: write). Auto-detects the PR
+      number on pull_request triggers.
     default: "false"
   github-repo:
     description: owner/name for issue creation; defaults to the current repository
@@ -126,7 +145,7 @@ runs:
       if: ${{ !startsWith(github.action_path, github.workspace) }}
       shell: bash
       env:
-        SAST_TRIAGE_VERSION: v1.2.11
+        SAST_TRIAGE_VERSION: v1.2.12
         SAST_TRIAGE_REPO: alexpermiakov/sast-triage
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
@@ -180,6 +199,8 @@ runs:
         INPUT_SUMMARY: ${{ inputs.summary }}
         INPUT_TRIAGED_SARIF: ${{ inputs.triaged-sarif }}
         INPUT_EFFORT: ${{ inputs.effort }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_NO_SUPPRESS_CWE: ${{ inputs.no-suppress-cwe }}
         INPUT_MAX_FINDINGS_BUDGET: ${{ inputs.max-findings-budget }}
         INPUT_PARALLEL: ${{ inputs.parallel }}
         INPUT_CREATE_ISSUES: ${{ inputs.create-issues }}
@@ -197,6 +218,8 @@ runs:
           -sarif-file "$INPUT_SARIF_FILE" -repo "$INPUT_REPO"
           -cache "$INPUT_CACHE" -report "$INPUT_REPORT"
           -scope "$INPUT_SCOPE" -mode "$INPUT_MODE"
+          -fail-on "$INPUT_FAIL_ON"
+          -no-suppress-cwe "$INPUT_NO_SUPPRESS_CWE"
           -effort "$INPUT_EFFORT"
           -max-findings-budget "$INPUT_MAX_FINDINGS_BUDGET"
           -parallel "$INPUT_PARALLEL"

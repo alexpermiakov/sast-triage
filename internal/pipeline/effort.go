@@ -13,6 +13,13 @@ type Effort struct {
 	MaxIterations  int // agent loop cap per finding
 }
 
+// EffortNames lists the presets weakest to strongest. Exported so the ordering
+// this package defines can be checked against the ranking internal/cache uses
+// to decide whether a cached verdict was reached at lower depth than the
+// current run offers — two lists that must agree and live apart, because one is
+// about bounds and the other about trust.
+var EffortNames = []string{"small", "medium", "large", "xlarge"}
+
 // EffortPreset resolves a preset name; "" means the default, medium, whose
 // values match the tool's long-standing hard-coded bounds.
 func EffortPreset(name string) (Effort, error) {

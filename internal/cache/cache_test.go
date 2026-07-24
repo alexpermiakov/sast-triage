@@ -215,24 +215,26 @@ func TestLookup(t *testing.T) {
 
 	unknown := key
 	unknown.Fingerprint = "unknown"
-	if _, ok := c.Lookup(unknown, root, flagged, "model-a"); ok {
+	if _, ok := c.Lookup(unknown, root, flagged, Decider{Model: "model-a"}); ok {
 		t.Error("unknown fingerprint: want miss")
 	}
-	e, ok := c.Lookup(key, root, flagged, "model-a")
+	e, ok := c.Lookup(key, root, flagged, Decider{Model: "model-a"})
 	if !ok || e.Verdict != "exploitable" {
 		t.Fatalf("want hit, got ok=%v e=%+v", ok, e)
 	}
 
 	// Evidence drift → miss, even though the flagged line is unchanged.
 	mutateLine(t, filepath.Join(root, "app/handlers.go"), 18, "\trow := s.db.QueryRow(query) // reviewed")
-	if _, ok := c.Lookup(key, root, flagged, "model-a"); ok {
+	if _, ok := c.Lookup(key, root, flagged, Decider{Model: "model-a"}); ok {
 		t.Error("evidence drift: want miss")
 	}
 }
 
-// A model change retires uncertain entries and only uncertain entries: a
-// non-answer is worth re-deciding, a decided verdict is a claim about the code
-// that the identity of the reader does not weaken.
+// A decider change retires the verdicts that leave a finding out of the gate's
+// way — benign and uncertain — and spares exploitable. benign is the one that
+// suppresses silently, so it is re-earned whenever what earned it changed;
+// uncertain is a non-answer worth re-deciding for free; exploitable already
+// fails loudly, and re-running it only risks a weaker decider overturning it.
 func TestLookupModelChange(t *testing.T) {
 	flagged := Region{File: "app/handlers.go", Start: 17, End: 17}
 	evidence := []string{"app/handlers.go:16", "app/handlers.go:18"}
@@ -259,7 +261,7 @@ func TestLookupModelChange(t *testing.T) {
 		want               bool
 	}{
 		{"benign", "model-a", true},
-		{"benign", "model-b", true},
+		{"benign", "model-b", false},
 		{"exploitable", "model-a", true},
 		{"exploitable", "model-b", true},
 		{"uncertain", "model-a", true},
@@ -269,8 +271,92 @@ func TestLookupModelChange(t *testing.T) {
 		{"shortcircuit", "model-b", true},
 	} {
 		k := Key{Fingerprint: tc.fingerprint, RuleID: "go.sqli", File: "app/handlers.go"}
-		if _, ok := c.Lookup(k, root, flagged, tc.model); ok != tc.want {
+		if _, ok := c.Lookup(k, root, flagged, Decider{Model: tc.model}); ok != tc.want {
 			t.Errorf("Lookup(%q, model=%q) ok=%v, want %v", tc.fingerprint, tc.model, ok, tc.want)
+		}
+	}
+}
+
+// Effort is upgrade-only and grandfathered. A run that looks harder than the
+// one that decided a suppression re-decides it; a run that looks less hard
+// reuses it rather than overwriting good work with cheaper work; and an entry
+// from before the field existed is trusted rather than retired, so introducing
+// it does not re-triage the world once.
+func TestLookupEffortIsUpgradeOnly(t *testing.T) {
+	flagged := Region{File: "app/handlers.go", Start: 17, End: 17}
+	evidence := []string{"app/handlers.go:16", "app/handlers.go:18"}
+	root := copySampleApp(t)
+	h, err := CodeHash(root, flagged, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := func(verdict, effort string) Entry {
+		return Entry{RuleID: "go.sqli", File: "app/handlers.go", Verdict: verdict,
+			Evidence: evidence, CodeHash: h, Model: "model-a", Effort: effort}
+	}
+	c := &Cache{Version: Version, Entries: map[string]Entry{
+		"small":       entry("benign", "small"),
+		"large":       entry("benign", "large"),
+		"legacy":      entry("benign", ""), // pre-Effort cache entry
+		"exploitable": entry("exploitable", "small"),
+	}}
+
+	for _, tc := range []struct {
+		fingerprint, effort string
+		want                bool
+	}{
+		{"small", "small", true},
+		{"small", "medium", false}, // deeper run: re-decide
+		{"small", "xlarge", false},
+		{"large", "medium", true}, // shallower run: keep the better verdict
+		{"large", "large", true},
+		{"large", "xlarge", false},
+		{"legacy", "xlarge", true},      // grandfathered
+		{"exploitable", "xlarge", true}, // never retired by any decider change
+	} {
+		k := Key{Fingerprint: tc.fingerprint, RuleID: "go.sqli", File: "app/handlers.go"}
+		d := Decider{Model: "model-a", Effort: tc.effort}
+		if _, ok := c.Lookup(k, root, flagged, d); ok != tc.want {
+			t.Errorf("Lookup(%q, effort=%q) ok=%v, want %v", tc.fingerprint, tc.effort, ok, tc.want)
+		}
+	}
+}
+
+// AgentVersion retires on a bump and only a bump: a rules change invalidates
+// verdicts reached under the superseded rules, a rollback does not invalidate
+// verdicts reached under newer ones, and version 0 is grandfathered.
+func TestLookupAgentVersionIsUpgradeOnly(t *testing.T) {
+	flagged := Region{File: "app/handlers.go", Start: 17, End: 17}
+	evidence := []string{"app/handlers.go:16", "app/handlers.go:18"}
+	root := copySampleApp(t)
+	h, err := CodeHash(root, flagged, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := func(verdict string, version int) Entry {
+		return Entry{RuleID: "go.sqli", File: "app/handlers.go", Verdict: verdict,
+			Evidence: evidence, CodeHash: h, Model: "model-a", AgentVersion: version}
+	}
+	c := &Cache{Version: Version, Entries: map[string]Entry{
+		"v1":     entry("benign", 1),
+		"v2":     entry("benign", 2),
+		"legacy": entry("benign", 0),
+	}}
+
+	for _, tc := range []struct {
+		fingerprint string
+		version     int
+		want        bool
+	}{
+		{"v1", 1, true},
+		{"v1", 2, false}, // rules moved on
+		{"v2", 1, true},  // binary rolled back; the newer verdict still stands
+		{"legacy", 9, true},
+	} {
+		k := Key{Fingerprint: tc.fingerprint, RuleID: "go.sqli", File: "app/handlers.go"}
+		d := Decider{Model: "model-a", AgentVersion: tc.version}
+		if _, ok := c.Lookup(k, root, flagged, d); ok != tc.want {
+			t.Errorf("Lookup(%q, agentVersion=%d) ok=%v, want %v", tc.fingerprint, tc.version, ok, tc.want)
 		}
 	}
 }

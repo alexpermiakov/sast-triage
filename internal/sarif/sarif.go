@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,8 +24,9 @@ type Finding struct {
 	RuleDesc    string
 	RuleHelp    string
 	Tags        []string
-	Severity    float64 // security-severity score, 0-10
-	Level       string  // error | warning | note
+	CWEs        []string // normalised "CWE-89" ids parsed from Tags
+	Severity    float64  // security-severity score, 0-10
+	Level       string   // error | warning | note
 	Message     string
 	File        string // repo-relative, slash-separated
 	StartLine   int
@@ -204,6 +206,7 @@ func toFinding(res result, rules map[string]rule) (Finding, error) {
 		}
 		f.RuleHelp = ru.Help.Text
 		f.Tags = ru.Properties.Tags
+		f.CWEs = cwesFromTags(ru.Properties.Tags)
 		if f.Level == "" {
 			f.Level = ru.DefaultConfiguration.Level
 		}
@@ -233,6 +236,54 @@ func toFinding(res result, rules map[string]rule) (Finding, error) {
 		break // one flow is enough context for triage; extras repeat the same path
 	}
 	return f, nil
+}
+
+// cwesFromTags pulls CWE identifiers out of a rule's tags, normalised to
+// "CWE-89" form, in tag order, deduplicated.
+//
+// CWE is the one classification that survives a scanner swap: rule ids are
+// scanner-specific and change with every ruleset, while the CWE a rule maps to
+// travels through SARIF from opengrep, semgrep and CodeQL alike, and means the
+// same thing in every language. Policy that has to hold across scanners keys on
+// this rather than on a rule id — see internal/policy.
+//
+// Two tag shapes are in the wild and both are accepted: semgrep and opengrep
+// write "CWE-89: Improper Neutralization ...", CodeQL writes
+// "external/cwe/cwe-089". Hence the substring scan and the leading-zero strip
+// rather than an equality test.
+func cwesFromTags(tags []string) []string {
+	var out []string
+	for _, t := range tags {
+		id, ok := parseCWE(t)
+		if !ok || slices.Contains(out, id) {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func parseCWE(tag string) (string, bool) {
+	low := strings.ToLower(tag)
+	i := strings.Index(low, "cwe-")
+	if i < 0 {
+		return "", false
+	}
+	// A run of digits must follow, and it is the whole number: "cwe-89x" is
+	// not a CWE id, so trailing non-digits are only allowed as a separator.
+	rest := low[i+len("cwe-"):]
+	n := 0
+	for n < len(rest) && rest[n] >= '0' && rest[n] <= '9' {
+		n++
+	}
+	if n == 0 {
+		return "", false
+	}
+	num := strings.TrimLeft(rest[:n], "0")
+	if num == "" {
+		return "", false // "CWE-0" is not an id
+	}
+	return "CWE-" + num, true
 }
 
 // severityScore returns the rule's security-severity property if present,

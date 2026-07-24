@@ -7,8 +7,8 @@
 // whether the result can fail the build (enforce|report|baseline).
 //
 // Exit codes: 0 success (whatever the verdicts), 1 tool failure, 2 usage
-// error, 3 gate tripped (-mode enforce and the run found exploitable findings
-// in scope).
+// error, 3 gate tripped (-mode enforce and the run found findings in scope of
+// a class -fail-on names; exploitable by default).
 package main
 
 import (
@@ -17,11 +17,13 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/alexpermiakov/sast-triage/internal/agent"
 	"github.com/alexpermiakov/sast-triage/internal/github"
 	"github.com/alexpermiakov/sast-triage/internal/pipeline"
+	"github.com/alexpermiakov/sast-triage/internal/policy"
 	"github.com/alexpermiakov/sast-triage/internal/report"
 	"github.com/alexpermiakov/sast-triage/internal/scope"
 )
@@ -39,6 +41,8 @@ func main() {
 		scopeMode        = flag.String("scope", scope.Full, "what to triage: full (every finding in the SARIF) or diff (only findings in files changed since -base-ref). Decided by your trigger, never by cache state")
 		baseRef          = flag.String("base-ref", "", "base to diff against for -scope diff, e.g. origin/main")
 		mode             = flag.String("mode", pipeline.ModeEnforce, "enforce (exit 3 on exploitable findings in scope), report (advisory, never fails), or baseline (triage everything, gate nothing — seeding a fresh cache)")
+		failOn           = flag.String("fail-on", "exploitable", "verdict classes -mode enforce fails on: exploitable, or exploitable,uncertain to fail on unresolved findings too (budget-deferred ones never gate)")
+		noSuppressCWE    = flag.String("no-suppress-cwe", "", "CWE classes the agent may not dismiss as benign, comma-separated (e.g. CWE-502,CWE-611); a benign verdict on these is recorded as uncertain and stays visible. Empty (the default) accepts every benign verdict")
 		prNumber         = flag.Int("pr", 0, "pull request number to post inline review comments on (exploitable findings only); 0 = skip")
 		commitSHA        = flag.String("commit", "", "head SHA the inline comments anchor to; required with -pr")
 		provider         = flag.String("provider", "", "LLM API shape: anthropic for Claude's native API, openai for anything OpenAI-compatible. Empty (default) infers openai from -base-url")
@@ -74,6 +78,19 @@ func main() {
 		fmt.Fprintln(os.Stderr, "sast-triage: -pr requires -commit (the head SHA inline comments anchor to)")
 		os.Exit(2)
 	}
+	gateOn, err := pipeline.ParseFailOn(*failOn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sast-triage: %v\n", err)
+		os.Exit(2)
+	}
+	// A malformed CWE stops the run rather than being skipped: a no-suppress
+	// list is invisible when it works, so an entry that matches nothing looks
+	// exactly like a repo with nothing dangerous in it.
+	rules, err := policy.New(strings.Split(*noSuppressCWE, ","))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sast-triage: -no-suppress-cwe: %v\n", err)
+		os.Exit(2)
+	}
 
 	eff, err := pipeline.EffortPreset(*effort)
 	if err != nil {
@@ -104,7 +121,10 @@ func main() {
 		BaseRef:          *baseRef,
 		PRNumber:         *prNumber,
 		CommitSHA:        *commitSHA,
+		GitHubRepo:       *githubRepo,
+		Policy:           rules,
 		Model:            *model,
+		Effort:           *effort,
 		MaxIterations:    *maxIter,
 		TokenBudget:      *tokenBudget,
 		MaxFindings:      *maxFindings,
@@ -169,7 +189,9 @@ func main() {
 			fmt.Fprintln(os.Stderr, "sast-triage: -pr requires GITHUB_TOKEN and -github-repo (or GITHUB_REPOSITORY)")
 			os.Exit(2)
 		}
-		cfg.Reviews = github.New(token, *githubRepo)
+		client := github.New(token, *githubRepo)
+		cfg.Reviews = client
+		cfg.Conversation = client
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -184,11 +206,15 @@ func main() {
 	if *scopeMode == scope.Diff {
 		scoped = fmt.Sprintf(" [diff scope vs %s: %d of %d scanned findings]", *baseRef, s.Total, s.Scanned)
 	}
-	fmt.Printf("triaged %d findings: %d benign, %d exploitable, %d uncertain (%d cached, %d new, %d deferred, %d tokens, %d tool calls, %d issues filed, %d PR comments)%s\n",
-		s.Total, s.Benign, s.Exploitable, s.Uncertain, s.Cached, s.Fresh, s.Deferred,
+	overrides := ""
+	if s.PolicyOverrides > 0 {
+		overrides = fmt.Sprintf(", %d not auto-suppressed by policy", s.PolicyOverrides)
+	}
+	fmt.Printf("triaged %d findings: %d benign (%d new%s), %d exploitable, %d uncertain (%d cached, %d new, %d deferred, %d tokens, %d tool calls, %d issues filed, %d PR comments)%s\n",
+		s.Total, s.Benign, s.NewBenign, overrides, s.Exploitable, s.Uncertain, s.Cached, s.Fresh, s.Deferred,
 		s.TokensUsed, s.ToolCalls, s.IssuesFiled, s.CommentsPosted, scoped)
 
-	fail, msg := pipeline.Gate(*mode, s)
+	fail, msg := pipeline.Gate(*mode, gateOn, s)
 	if msg != "" {
 		fmt.Fprintf(os.Stderr, "sast-triage: %s\n", msg)
 	}

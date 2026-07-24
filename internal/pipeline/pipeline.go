@@ -19,6 +19,7 @@ import (
 	"github.com/alexpermiakov/sast-triage/internal/agent"
 	"github.com/alexpermiakov/sast-triage/internal/cache"
 	"github.com/alexpermiakov/sast-triage/internal/github"
+	"github.com/alexpermiakov/sast-triage/internal/policy"
 	"github.com/alexpermiakov/sast-triage/internal/report"
 	"github.com/alexpermiakov/sast-triage/internal/sarif"
 	"github.com/alexpermiakov/sast-triage/internal/scope"
@@ -40,6 +41,17 @@ type ReviewCommenter interface {
 	ListReviewComments(ctx context.Context, pr int) ([]github.ReviewComment, error)
 }
 
+// ConversationCommenter posts the run's suppression summary on a pull
+// request's conversation. Kept apart from ReviewCommenter because the two
+// answer different questions — that one puts a confirmed vulnerability next to
+// the line that has it, this one tells a reviewer what the change proposes to
+// dismiss — and because they fail independently: losing the summary must not
+// cost the inline comments.
+type ConversationCommenter interface {
+	CreateIssueComment(ctx context.Context, issue int, body string) error
+	ListIssueComments(ctx context.Context, issue int) ([]github.IssueComment, error)
+}
+
 type Config struct {
 	SARIFPath        string
 	CachePath        string
@@ -57,7 +69,11 @@ type Config struct {
 	Scope   string
 	BaseRef string // required for scope.Diff, e.g. "origin/main"
 
-	Model          string
+	Model string
+	// Effort is the triage-depth preset name this run is using. Recorded on
+	// every verdict it decides, so a later run at greater depth can tell which
+	// cached verdicts were reached with less code in front of them.
+	Effort         string
 	MaxIterations  int
 	TokenBudget    int // per finding
 	MaxFindings    int // run-level cap on LLM-triaged findings; overflow deferred
@@ -76,19 +92,44 @@ type Config struct {
 
 	PRNumber  int    // pull request to comment on; 0 → skip inline comments
 	CommitSHA string // head SHA the comments anchor to; required with PRNumber
+	// GitHubRepo is "owner/name", used to link the suppression summary at the
+	// cache file inside this PR's diff. Empty just drops the link.
+	GitHubRepo string
 
-	Client  agent.Client    // nil is allowed when every finding is cached/short-circuit
-	Issues  IssueCreator    // nil → skip issue routing
-	Reviews ReviewCommenter // nil → skip inline PR comments
-	Now     func() time.Time
-	Log     io.Writer
+	// Policy is the no-suppress rules this run enforces: the CWE classes where
+	// a benign verdict from the agent is not accepted. nil bars nothing, which
+	// is the shipped default — the tool ships no opinion about which classes a
+	// given repo can afford to auto-suppress.
+	Policy *policy.Policy
+
+	Client       agent.Client          // nil is allowed when every finding is cached/short-circuit
+	Issues       IssueCreator          // nil → skip issue routing
+	Reviews      ReviewCommenter       // nil → skip inline PR comments
+	Conversation ConversationCommenter // nil → skip the suppression summary comment
+	Now          func() time.Time
+	Log          io.Writer
 }
 
 type Summary struct {
 	Total, Benign, Exploitable, Uncertain int
 	Cached, Fresh, Deferred               int
 	NewExploitable                        int // exploitable verdicts decided this run (not cache hits)
-	TokensUsed                            int
+	// NewBenign is the suppressions this run proposes: benign verdicts decided
+	// now, which are exactly the lines the cache delta adds. Reported
+	// separately from Benign because "3 findings suppressed by this change" is
+	// a reviewable claim and "412 findings are suppressed in this repo" is not.
+	NewBenign int
+	// PolicyOverrides is how many verdicts internal/policy changed, over cached
+	// and fresh alike. Surfaced so a jump in uncertain findings is traceable to
+	// a rules change rather than looking like the model got worse.
+	PolicyOverrides int
+	// GatingUncertain counts uncertain findings a strict gate may fail on:
+	// decided ones only. A deferred finding is uncertain because the run budget
+	// ran out before anything looked at it, which is the tool failing to do its
+	// job, not a claim about the code — failing a build on it would make the
+	// gate a function of how busy the queue was.
+	GatingUncertain int
+	TokensUsed      int
 	// ToolCalls is the run's total successful read_file/grep_repo calls, over
 	// the findings triaged this run. Reported next to the tokens because the
 	// two together say what the spend bought: tokens with no tool calls is a
@@ -128,6 +169,13 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	if cfg.IssueLabel == "" {
 		cfg.IssueLabel = "security/triage-confirmed"
 	}
+	// Logged either way: an operator who set the flag needs to see it took, and
+	// one who did not needs to see that every benign verdict will suppress.
+	if barred := cfg.Policy.List(); len(barred) > 0 {
+		fmt.Fprintf(cfg.Log, "no-suppress: %s — a benign verdict on these is recorded as uncertain\n", strings.Join(barred, ", "))
+	} else {
+		fmt.Fprintf(cfg.Log, "no-suppress: none configured — every benign verdict is accepted as a suppression\n")
+	}
 
 	findings, err := sarif.ParseFile(cfg.SARIFPath)
 	if err != nil {
@@ -161,10 +209,11 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	// findings that need the LLM count against the run budget. Findings
 	// arrive severity-sorted from the parser, so budget goes to the scary
 	// ones first.
+	decider := cache.Decider{Model: cfg.Model, Effort: cfg.Effort, AgentVersion: policy.AgentVersion}
 	for _, f := range findings {
 		key := cache.Key{Fingerprint: f.Fingerprint, RuleID: f.RuleID, File: f.File}
-		if e, ok := c.Lookup(key, cfg.RepoRoot, agent.FlaggedRegion(f), cfg.Model); ok {
-			items = append(items, itemFromEntry(f, e))
+		if e, ok := c.Lookup(key, cfg.RepoRoot, agent.FlaggedRegion(f), decider); ok {
+			items = append(items, itemFromEntry(cfg.Policy, f, e))
 			continue
 		}
 		if v, ok := agent.ShortCircuit(f); ok {
@@ -242,6 +291,9 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	if cfg.Reviews != nil && cfg.PRNumber > 0 {
 		summary.CommentsPosted = postReviewComments(ctx, cfg, items)
 	}
+	if cfg.Conversation != nil && cfg.PRNumber > 0 {
+		postSuppressionSummary(ctx, cfg, items)
+	}
 
 	if err := c.Save(cfg.CachePath); err != nil {
 		return summary, err
@@ -311,18 +363,23 @@ func mergeVerdict(c *cache.Cache, cfg Config, f sarif.Finding, v agent.Verdict, 
 		return
 	}
 	e := cache.Entry{
-		RuleID:     f.RuleID,
-		File:       f.File,
-		Verdict:    v.Verdict,
-		Reason:     v.Reason,
-		Evidence:   v.Evidence,
-		CodeHash:   hash,
-		Model:      cfg.Model,
-		DecidedAt:  cfg.Now().UTC().Format(time.RFC3339),
-		TokensUsed: v.Tokens.Total(),
+		RuleID:       f.RuleID,
+		File:         f.File,
+		Verdict:      v.Verdict,
+		Reason:       v.Reason,
+		Evidence:     v.Evidence,
+		CodeHash:     hash,
+		Model:        cfg.Model,
+		Effort:       cfg.Effort,
+		AgentVersion: policy.AgentVersion,
+		DecidedAt:    cfg.Now().UTC().Format(time.RFC3339),
+		TokensUsed:   v.Tokens.Total(),
 	}
 	if v.ShortCircuit {
-		e.Model = "rule:short-circuit"
+		// A pure rule decided this, so none of the decider fields describe it —
+		// recording an effort or an agent version here would invite a later run
+		// to retire an entry no model ever touched.
+		e.Model, e.Effort, e.AgentVersion = cache.ModelShortCircuit, "", 0
 	}
 	// Re-triage must not forget the filed issue — but only an entry about this
 	// same finding has an issue to hand over. Identity is checked here for the
@@ -334,7 +391,7 @@ func mergeVerdict(c *cache.Cache, cfg Config, f sarif.Finding, v agent.Verdict, 
 	}
 	c.Entries[f.Fingerprint] = e
 
-	it := itemFromEntry(f, e)
+	it := itemFromEntry(cfg.Policy, f, e)
 	it.Cached = false
 	it.ShortCircuit = v.ShortCircuit
 	it.TokensIn, it.TokensOut, it.ToolCalls = v.Tokens.In, v.Tokens.Out, v.ToolCalls
@@ -440,6 +497,36 @@ func postReviewComments(ctx context.Context, cfg Config, items []report.Item) in
 	return posted
 }
 
+// postSuppressionSummary comments on the PR conversation with what this run
+// proposes to suppress, so the dismissals are visible where the review happens
+// rather than only in a cache diff someone has to think to open.
+//
+// Silent when the run suppresses nothing new: a bot that comments on every run
+// regardless is one people filter out, taking the runs that mattered with it.
+// Every failure degrades to a log line — this is an announcement about work
+// already durably recorded in the cache, so losing it must not fail the run.
+func postSuppressionSummary(ctx context.Context, cfg Config, items []report.Item) {
+	body := report.SuppressionComment(items, report.Options{LinkBase: cfg.LinkBase},
+		cfg.CommitSHA, report.CacheDiffURL(cfg.GitHubRepo, cfg.PRNumber, cfg.CachePath))
+	if body == "" {
+		return
+	}
+	existing, err := cfg.Conversation.ListIssueComments(ctx, cfg.PRNumber)
+	if err != nil {
+		fmt.Fprintf(cfg.Log, "failed to list PR comments: %v — suppression summary skipped this run\n", err)
+		return
+	}
+	marker := report.SuppressionMarker(cfg.CommitSHA)
+	if slices.ContainsFunc(existing, func(c github.IssueComment) bool {
+		return strings.Contains(c.Body, marker)
+	}) {
+		return
+	}
+	if err := cfg.Conversation.CreateIssueComment(ctx, cfg.PRNumber, body); err != nil {
+		fmt.Fprintf(cfg.Log, "failed to post suppression summary: %v\n", err)
+	}
+}
+
 // adoptIssue finds the oldest existing issue for a finding: an exact
 // fingerprint-marker match in the body, or failing that the same title (two
 // fingerprints can flag the same rule at the same location).
@@ -456,21 +543,34 @@ func adoptIssue(existing []github.Issue, marker, title string) int {
 	return best
 }
 
-func itemFromEntry(f sarif.Finding, e cache.Entry) report.Item {
+// itemFromEntry flattens a cache entry into a report item, applying
+// internal/policy on the way through.
+//
+// Policy is applied HERE, where a verdict is used, rather than at the point one
+// is minted. Two consequences, both wanted: the cache keeps recording what the
+// agent actually concluded, so its diff stays an honest audit trail and a
+// reviewer can see the reasoning policy overrode; and a change to the rules
+// takes effect on entries already in the cache, without re-triaging a thing.
+// Every item the run emits passes through here, cached and fresh alike, so
+// there is no path that reaches the report or the gate unfiltered.
+func itemFromEntry(p *policy.Policy, f sarif.Finding, e cache.Entry) report.Item {
+	verdict, reason, overridden := p.Apply(e.Verdict, e.Reason, f.CWEs)
 	return report.Item{
-		Fingerprint: f.Fingerprint,
-		RuleID:      f.RuleID,
-		File:        f.File,
-		StartLine:   f.StartLine,
-		EndLine:     f.EndLine,
-		Severity:    f.Severity,
-		Level:       f.Level,
-		Message:     f.Message,
-		Verdict:     e.Verdict,
-		Reason:      e.Reason,
-		Evidence:    e.Evidence,
-		Cached:      true,
-		IssueRef:    e.IssueRef,
+		Fingerprint:    f.Fingerprint,
+		RuleID:         f.RuleID,
+		File:           f.File,
+		StartLine:      f.StartLine,
+		EndLine:        f.EndLine,
+		Severity:       f.Severity,
+		Level:          f.Level,
+		Message:        f.Message,
+		CWEs:           f.CWEs,
+		Verdict:        verdict,
+		Reason:         reason,
+		PolicyOverride: overridden,
+		Evidence:       e.Evidence,
+		Cached:         true,
+		IssueRef:       e.IssueRef,
 	}
 }
 
@@ -484,6 +584,7 @@ func uncachedUncertain(f sarif.Finding, reason string) report.Item {
 		Severity:    f.Severity,
 		Level:       f.Level,
 		Message:     f.Message,
+		CWEs:        f.CWEs,
 		Verdict:     agent.VerdictUncertain,
 		Reason:      reason,
 	}
@@ -501,6 +602,9 @@ func summarize(items []report.Item) Summary {
 		switch it.Verdict {
 		case agent.VerdictBenign:
 			s.Benign++
+			if !it.Cached {
+				s.NewBenign++
+			}
 		case agent.VerdictExploitable:
 			s.Exploitable++
 			if !it.Cached {
@@ -508,6 +612,12 @@ func summarize(items []report.Item) Summary {
 			}
 		default:
 			s.Uncertain++
+			if !it.Deferred {
+				s.GatingUncertain++
+			}
+		}
+		if it.PolicyOverride {
+			s.PolicyOverrides++
 		}
 		if it.Cached {
 			s.Cached++

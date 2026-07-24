@@ -295,3 +295,78 @@ func TestIssueBody(t *testing.T) {
 		}
 	}
 }
+
+// The suppression comment is the answer to "your tool hides real vulns": it
+// says, in the PR, exactly what this change proposes to dismiss and why.
+func TestSuppressionComment(t *testing.T) {
+	items := sampleItems()
+	got := SuppressionComment(items, Options{}, "abc123", "https://github.com/o/r/pull/7/files#diff-x")
+
+	// sampleItems has one fresh benign (the short-circuited test file); the
+	// other benign is cached, i.e. approved in an earlier PR.
+	if !strings.Contains(got, "1 finding suppressed") {
+		t.Errorf("comment does not count the fresh suppression:\n%s", got)
+	}
+	if strings.Contains(got, "app/config.go") {
+		t.Error("comment re-lists a cached suppression; only what this change proposes belongs here")
+	}
+	if !strings.Contains(got, "app/handlers_test.go") {
+		t.Errorf("comment omits the fresh suppression:\n%s", got)
+	}
+	for _, want := range []string{
+		"merging approves them",                      // what the reviewer is actually doing
+		".sast-triage/cache.json",                    // where to look
+		"https://github.com/o/r/pull/7/files#diff-x", // one click to the diff
+		SuppressionMarker("abc123"),                  // dedupe on re-run
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("comment missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// Silence when there is nothing new to approve: a bot that comments every run
+// is one people learn to skip, taking the runs that mattered with it.
+func TestSuppressionCommentSilentWithoutFreshSuppressions(t *testing.T) {
+	var items []Item
+	for _, it := range sampleItems() {
+		if it.Verdict == "benign" {
+			it.Cached = true
+		}
+		items = append(items, it)
+	}
+	if got := SuppressionComment(items, Options{}, "abc123", ""); got != "" {
+		t.Errorf("want no comment when nothing new is suppressed, got:\n%s", got)
+	}
+}
+
+// A policy override is the opposite of a suppression and has to read that way:
+// the agent said benign, the tool declined to accept it.
+func TestSuppressionCommentReportsPolicyOverrides(t *testing.T) {
+	items := []Item{{
+		Fingerprint: "fp-over", RuleID: "java.lang.security.trustbound",
+		File: "src/Session.java", StartLine: 12, EndLine: 12,
+		CWEs: []string{"CWE-501"}, Verdict: "uncertain",
+		Reason: "not auto-suppressed: CWE-501 ...", PolicyOverride: true,
+	}}
+	got := SuppressionComment(items, Options{}, "abc123", "")
+	if !strings.Contains(got, "1 finding not auto-suppressed") {
+		t.Errorf("override not reported:\n%s", got)
+	}
+	if strings.Contains(got, "suppressed by this change") {
+		t.Errorf("an override is not a suppression:\n%s", got)
+	}
+}
+
+func TestCacheDiffURL(t *testing.T) {
+	if got := CacheDiffURL("", 7, ".sast-triage/cache.json"); got != "" {
+		t.Errorf("no repo slug must yield no link, got %q", got)
+	}
+	if got := CacheDiffURL("o/r", 0, ".sast-triage/cache.json"); got != "" {
+		t.Errorf("no PR must yield no link, got %q", got)
+	}
+	got := CacheDiffURL("o/r", 7, ".sast-triage/cache.json")
+	if !strings.HasPrefix(got, "https://github.com/o/r/pull/7/files#diff-") {
+		t.Errorf("CacheDiffURL = %q, want the PR files view anchored at the cache file", got)
+	}
+}

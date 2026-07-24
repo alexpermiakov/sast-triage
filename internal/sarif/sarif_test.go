@@ -244,3 +244,58 @@ func TestSyntheticFingerprintSeparatesLocations(t *testing.T) {
 		t.Error("synthetic fingerprint is not deterministic")
 	}
 }
+
+// CWE is the classification policy keys on, so it has to survive the two tag
+// spellings scanners actually emit. Semgrep and opengrep write
+// "CWE-89: <title>"; CodeQL writes "external/cwe/cwe-089".
+func TestCWEsFromTags(t *testing.T) {
+	tests := []struct {
+		name string
+		tags []string
+		want []string
+	}{
+		{"semgrep style", []string{"CWE-89: Improper Neutralization"}, []string{"CWE-89"}},
+		{"codeql style", []string{"external/cwe/cwe-089"}, []string{"CWE-89"}},
+		{"leading zeros stripped", []string{"cwe-0078"}, []string{"CWE-78"}},
+		{"bare id", []string{"CWE-614"}, []string{"CWE-614"}},
+		{"several, in tag order", []string{"CWE-327: x", "security", "CWE-328: y"}, []string{"CWE-327", "CWE-328"}},
+		{"deduplicated", []string{"CWE-89: x", "external/cwe/cwe-089"}, []string{"CWE-89"}},
+		{"non-cwe tags ignored", []string{"security", "OWASP-A03:2021 - Injection"}, nil},
+		{"no digits is not an id", []string{"CWE-"}, nil},
+		{"zero is not an id", []string{"CWE-0"}, nil},
+		{"nothing", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := cwesFromTags(tt.tags)
+			if len(got) != len(tt.want) {
+				t.Fatalf("cwesFromTags(%q) = %q, want %q", tt.tags, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("cwesFromTags(%q)[%d] = %q, want %q", tt.tags, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// The fixture is real scanner output, so this also pins that CWEs survive a
+// full parse rather than only the helper.
+func TestParseExtractsCWEs(t *testing.T) {
+	findings, err := ParseFile("../../testdata/findings.sarif")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, f := range findings {
+		for _, c := range f.CWEs {
+			seen[c] = true
+		}
+	}
+	for _, want := range []string{"CWE-89", "CWE-798"} {
+		if !seen[want] {
+			t.Errorf("parsed findings carry no %s; got %v", want, seen)
+		}
+	}
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/alexpermiakov/sast-triage/internal/agent"
 	"github.com/alexpermiakov/sast-triage/internal/cache"
 	"github.com/alexpermiakov/sast-triage/internal/github"
+	"github.com/alexpermiakov/sast-triage/internal/policy"
 )
 
 const (
@@ -186,7 +187,7 @@ func TestReportAndCacheCoverTheSameFindings(t *testing.T) {
 			flagged.Start, flagged.End = 3, 3
 		}
 		k := cache.Key{Fingerprint: fp, RuleID: e.RuleID, File: e.File}
-		if _, ok := c.Lookup(k, cfg.RepoRoot, flagged, cfg.Model); !ok && e.Verdict != "uncertain" {
+		if _, ok := c.Lookup(k, cfg.RepoRoot, flagged, cache.Decider{Model: cfg.Model, Effort: cfg.Effort, AgentVersion: policy.AgentVersion}); !ok && e.Verdict != "uncertain" {
 			t.Errorf("entry %s (%s %s) does not verify under its own identity", fp, e.RuleID, e.File)
 		}
 	}
@@ -643,10 +644,12 @@ func TestRunTransportErrorNotCached(t *testing.T) {
 	}
 }
 
-// Switching models re-triages uncertain entries and nothing else: a
-// non-answer is worth re-deciding under a new model, a decided verdict is a
-// claim about the code that survives the swap.
-func TestRunModelChangeRetriagesOnlyUncertain(t *testing.T) {
+// Switching models re-triages the verdicts that keep a finding away from the
+// gate — benign and uncertain — and leaves exploitable alone. benign is the one
+// that suppresses silently, so a new decider must re-earn it; uncertain is a
+// non-answer worth re-deciding for free; exploitable already fails loudly, and
+// re-running it only risks a weaker model overturning a stronger one's work.
+func TestRunModelChangeRetriagesBenignAndUncertain(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := baseConfig(t, dir)
@@ -663,26 +666,27 @@ func TestRunModelChangeRetriagesOnlyUncertain(t *testing.T) {
 		t.Fatalf("first run summary = %+v, want 1 uncertain + 2 benign", s)
 	}
 
-	// Same findings, different model. Only the uncertain one may reach the LLM;
-	// a second scripted response is deliberately absent, so any extra call
-	// exhausts the script and surfaces as an uncertain verdict.
+	// Same findings, different model. The uncertain and the benign both come
+	// back; the short-circuit does not, because no model decided it.
 	cfg2 := baseConfig(t, dir)
 	cfg2.Model = "model-b"
 	client2 := &fakeClient{responses: []*agent.Response{
 		textResp(`{"verdict": "exploitable", "reason": "id flows unsanitized to QueryRow", "evidence": ["app/handlers.go:16", "app/handlers.go:17-18"]}`),
+		textResp(`{"verdict": "benign", "reason": "sample credential in demo code, not a live secret", "evidence": ["app/config.go:7"]}`),
 	}}
 	cfg2.Client = client2
 	s2, err := Run(context.Background(), cfg2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two calls, one finding: the evidence turn the gate requires, then the
-	// verdict. A third would mean a second finding was re-triaged.
-	if client2.calls != 2 {
-		t.Errorf("LLM calls on model change = %d, want 2 (only the uncertain finding re-triages)", client2.calls)
+	// Three calls for two findings: the tainted-flow one spends a turn on the
+	// evidence the gate requires, the context-free one is offered no tools and
+	// answers immediately. A fourth would mean the short-circuit re-triaged.
+	if client2.calls != 3 {
+		t.Errorf("LLM calls on model change = %d, want 3 (benign + uncertain re-triage, short-circuit does not)", client2.calls)
 	}
-	if s2.Cached != 2 || s2.Fresh != 1 {
-		t.Errorf("model change accounting = %+v, want 2 cached + 1 fresh", s2)
+	if s2.Cached != 1 || s2.Fresh != 2 {
+		t.Errorf("model change accounting = %+v, want 1 cached + 2 fresh", s2)
 	}
 	if s2.Exploitable != 1 || s2.Benign != 2 {
 		t.Errorf("model change summary = %+v", s2)
@@ -697,7 +701,7 @@ func TestRunModelChangeRetriagesOnlyUncertain(t *testing.T) {
 		t.Errorf("re-triaged entry = %+v, want exploitable decided by model-b", sqli)
 	}
 
-	// Third run, model unchanged: a stable model re-runs nothing, so a nil
+	// Third run, model unchanged: a stable decider re-runs nothing, so a nil
 	// client is enough.
 	cfg3 := baseConfig(t, dir)
 	cfg3.Model = "model-b"
@@ -707,6 +711,78 @@ func TestRunModelChangeRetriagesOnlyUncertain(t *testing.T) {
 	}
 	if s3.Cached != 3 || s3.Fresh != 0 {
 		t.Errorf("stable model accounting = %+v, want everything cached", s3)
+	}
+
+	// Fourth run, a third model: the exploitable survives the swap while the
+	// benign is re-earned. This is the asymmetry, isolated — one cache, one
+	// model change, two verdict classes treated differently.
+	cfg4 := baseConfig(t, dir)
+	cfg4.Model = "model-c"
+	client4 := &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "benign", "reason": "still a demo credential", "evidence": ["app/config.go:7"]}`),
+	}}
+	cfg4.Client = client4
+	s4, err := Run(context.Background(), cfg4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client4.calls != 1 {
+		t.Errorf("LLM calls on second model change = %d, want 1 (the benign only)", client4.calls)
+	}
+	if s4.Cached != 2 || s4.Fresh != 1 {
+		t.Errorf("second model change accounting = %+v, want 2 cached (exploitable + short-circuit) + 1 fresh", s4)
+	}
+	c4, err := cache.Load(cfg4.CachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := c4.Entries["0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9_0"]; e.Model != "model-b" {
+		t.Errorf("exploitable entry = %+v, want it still attributed to model-b (never re-triaged)", e)
+	}
+}
+
+// Raising -effort re-triages the suppressions decided with less code in front
+// of the model, and lowering it does not throw away the deeper run's work.
+func TestRunEffortUpgradeRetriagesBenign(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := baseConfig(t, dir)
+	cfg.Effort = "small"
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "exploitable", "reason": "id flows unsanitized to QueryRow", "evidence": ["app/handlers.go:16", "app/handlers.go:17-18"]}`),
+		textResp(`{"verdict": "benign", "reason": "sample credential in demo code", "evidence": ["app/config.go:7"]}`),
+	}}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same model, deeper look: the benign comes back, the exploitable does not.
+	cfg2 := baseConfig(t, dir)
+	cfg2.Effort = "xlarge"
+	client2 := &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "benign", "reason": "confirmed at depth: demo credential", "evidence": ["app/config.go:7"]}`),
+	}}
+	cfg2.Client = client2
+	s2, err := Run(context.Background(), cfg2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client2.calls != 1 {
+		t.Errorf("LLM calls on effort upgrade = %d, want 1 (the benign only)", client2.calls)
+	}
+	if s2.Cached != 2 || s2.Fresh != 1 {
+		t.Errorf("effort upgrade accounting = %+v, want 2 cached + 1 fresh", s2)
+	}
+
+	// Same model, shallower look: nothing re-runs, so a nil client suffices.
+	cfg3 := baseConfig(t, dir)
+	cfg3.Effort = "small"
+	s3, err := Run(context.Background(), cfg3)
+	if err != nil {
+		t.Fatalf("a lower-effort run must reuse deeper verdicts, not re-triage them: %v", err)
+	}
+	if s3.Cached != 3 || s3.Fresh != 0 {
+		t.Errorf("effort downgrade accounting = %+v, want everything cached", s3)
 	}
 }
 
@@ -724,5 +800,216 @@ func TestRunMissingSARIF(t *testing.T) {
 	cfg.SARIFPath = filepath.Join(dir, "absent.sarif")
 	if _, err := Run(context.Background(), cfg); err == nil {
 		t.Error("missing SARIF: want error")
+	}
+}
+
+// barredCWESARIF writes a log whose single rule maps to CWE-501, one of the
+// classes internal/policy does not accept a benign verdict for.
+func barredCWESARIF(t *testing.T, dir string) string {
+	t.Helper()
+	body := `{"version":"2.1.0","runs":[{"tool":{"driver":{"name":"semgrep","rules":[
+		{"id":"java.trustbound","properties":{"tags":["CWE-501: Trust Boundary Violation","security"],
+		 "security-severity":"7.5"}}]}},
+		"results":[{"ruleId":"java.trustbound","message":{"text":"trust boundary"},
+		 "fingerprints":{"matchBasedId/v1":"tb1"},
+		 "locations":[{"physicalLocation":{"artifactLocation":{"uri":"app/config.go"},
+			"region":{"startLine":7,"snippet":{"text":"x"}}}}]}]}]}`
+	p := filepath.Join(dir, "barred.sarif")
+	if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// A benign verdict on a barred CWE class does not suppress. The agent's answer
+// is still recorded in the cache — the audit trail should show what it
+// concluded — but everything downstream sees uncertain.
+func TestRunPolicyBarsSuppressionOnListedCWE(t *testing.T) {
+	dir := t.TempDir()
+	barred, err := policy.New([]string{"CWE-501"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := baseConfig(t, dir)
+	cfg.SARIFPath = barredCWESARIF(t, dir)
+	cfg.TriagedSARIFPath = filepath.Join(dir, "triaged.sarif")
+	cfg.Policy = barred
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "benign", "reason": "the value is a literal", "evidence": ["app/config.go:7"]}`),
+	}}
+
+	s, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Benign != 0 || s.Uncertain != 1 || s.PolicyOverrides != 1 {
+		t.Fatalf("summary = %+v, want the benign overridden to uncertain", s)
+	}
+
+	// The cache keeps the model's actual verdict: policy is applied where a
+	// verdict is used, so the trail stays honest and a rules change takes
+	// effect on existing entries without re-triaging anything.
+	c, err := cache.Load(cfg.CachePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := c.Entries["tb1"]; e.Verdict != "benign" {
+		t.Errorf("cache entry = %+v, want the agent's own benign recorded", e)
+	}
+
+	// The SARIF uploaded to Code Scanning must not carry a suppression either.
+	triaged, err := os.ReadFile(cfg.TriagedSARIFPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(triaged), `"suppressions"`) {
+		t.Error("triaged SARIF suppresses a finding policy refused to suppress")
+	}
+
+	// Second run, everything cached: the override must survive the cache path,
+	// not just the fresh one. A nil client proves nothing re-triaged.
+	cfg2 := baseConfig(t, dir)
+	cfg2.SARIFPath = cfg.SARIFPath
+	cfg2.Policy = barred
+	s2, err := Run(context.Background(), cfg2)
+	if err != nil {
+		t.Fatalf("cached run must need no client: %v", err)
+	}
+	if s2.Cached != 1 || s2.Benign != 0 || s2.Uncertain != 1 || s2.PolicyOverrides != 1 {
+		t.Errorf("cached summary = %+v, want the override applied to the cache hit too", s2)
+	}
+}
+
+type fakeConversation struct {
+	existing []github.IssueComment
+	posted   []string
+	listErr  error
+}
+
+func (f *fakeConversation) ListIssueComments(_ context.Context, _ int) ([]github.IssueComment, error) {
+	return f.existing, f.listErr
+}
+
+func (f *fakeConversation) CreateIssueComment(_ context.Context, _ int, body string) error {
+	f.posted = append(f.posted, body)
+	f.existing = append(f.existing, github.IssueComment{Body: body})
+	return nil
+}
+
+// The suppressions this run proposes get announced on the PR, once per head
+// commit, and never twice.
+func TestRunPostsSuppressionSummary(t *testing.T) {
+	dir := t.TempDir()
+	conv := &fakeConversation{}
+	cfg := baseConfig(t, dir)
+	cfg.PRNumber, cfg.CommitSHA, cfg.GitHubRepo = 7, "deadbeef", "o/r"
+	cfg.Conversation = conv
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "uncertain", "reason": "could not trace"}`),
+		textResp(`{"verdict": "benign", "reason": "demo credential", "evidence": ["app/config.go:7"]}`),
+	}}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(conv.posted) != 1 {
+		t.Fatalf("posted %d comments, want 1", len(conv.posted))
+	}
+	body := conv.posted[0]
+	if !strings.Contains(body, "suppressed by this change") || !strings.Contains(body, "app/config.go") {
+		t.Errorf("comment does not name what it suppressed:\n%s", body)
+	}
+	if !strings.Contains(body, "https://github.com/o/r/pull/7/files#diff-") {
+		t.Errorf("comment does not link the cache diff:\n%s", body)
+	}
+
+	// Re-run on the same head: everything is cached, nothing is newly
+	// suppressed, and the existing comment is recognised. Either way, silence.
+	cfg2 := baseConfig(t, dir)
+	cfg2.PRNumber, cfg2.CommitSHA, cfg2.GitHubRepo = 7, "deadbeef", "o/r"
+	cfg2.Conversation = conv
+	cfg2.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "uncertain", "reason": "still cannot trace"}`),
+	}}
+	if _, err := Run(context.Background(), cfg2); err != nil {
+		t.Fatal(err)
+	}
+	if len(conv.posted) != 1 {
+		t.Errorf("posted %d comments across two runs on one head, want 1", len(conv.posted))
+	}
+}
+
+// Announcing is not the work. The cache delta is already saved by the time this
+// runs, so a GitHub failure costs a comment and nothing else.
+func TestRunSuppressionSummaryFailureIsNotFatal(t *testing.T) {
+	dir := t.TempDir()
+	cfg := baseConfig(t, dir)
+	cfg.PRNumber, cfg.CommitSHA, cfg.GitHubRepo = 7, "deadbeef", "o/r"
+	cfg.Conversation = &fakeConversation{listErr: fmt.Errorf("403 forbidden")}
+	cfg.Client = &fakeClient{responses: []*agent.Response{
+		textResp(`{"verdict": "uncertain", "reason": "could not trace"}`),
+		textResp(`{"verdict": "benign", "reason": "demo credential", "evidence": ["app/config.go:7"]}`),
+	}}
+	s, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("a failed PR comment must not fail the run: %v", err)
+	}
+	// Both fresh benigns: the scripted one and the short-circuited test path.
+	if s.NewBenign != 2 {
+		t.Errorf("summary = %+v, want the suppressions still counted", s)
+	}
+	c, err := cache.Load(cfg.CachePath)
+	if err != nil || len(c.Entries) == 0 {
+		t.Errorf("cache delta lost when the comment failed: %v, %d entries", err, len(c.Entries))
+	}
+}
+
+// The no-suppress list is the operator's to set, and it is empty until they set
+// it. Same finding, same verdict, four policies, and only the ones that name
+// this finding's CWE change the outcome.
+func TestRunPolicyIsConfigurable(t *testing.T) {
+	empty, err := policy.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := policy.New([]string{"CWE-502"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matching, err := policy.New([]string{"CWE-501"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name          string
+		policy        *policy.Policy
+		wantBenign    int
+		wantOverrides int
+	}{
+		// The finding is CWE-501. baseConfig leaves Policy nil, which bars
+		// nothing — configuring the tool is how the mechanism turns on.
+		{name: "unset bars nothing", policy: nil, wantBenign: 1, wantOverrides: 0},
+		{name: "empty list bars nothing", policy: empty, wantBenign: 1, wantOverrides: 0},
+		{name: "list not covering this CWE", policy: other, wantBenign: 1, wantOverrides: 0},
+		{name: "list covering this CWE", policy: matching, wantBenign: 0, wantOverrides: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfg := baseConfig(t, dir)
+			cfg.SARIFPath = barredCWESARIF(t, dir)
+			cfg.Policy = tt.policy
+			cfg.Client = &fakeClient{responses: []*agent.Response{
+				textResp(`{"verdict": "benign", "reason": "the value is a literal", "evidence": ["app/config.go:7"]}`),
+			}}
+			s, err := Run(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if s.Benign != tt.wantBenign || s.PolicyOverrides != tt.wantOverrides {
+				t.Errorf("summary = %+v, want %d benign / %d overrides", s, tt.wantBenign, tt.wantOverrides)
+			}
+		})
 	}
 }

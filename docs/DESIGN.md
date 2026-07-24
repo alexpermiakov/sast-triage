@@ -113,6 +113,8 @@ cache backend.
       "evidence": ["path:line", "path:line-line"],
       "codeHash": "sha256:...",
       "model": "...",
+      "effort": "medium",
+      "agentVersion": 1,
       "decidedAt": "RFC3339",
       "tokensUsed": 0,
       "issueRef": 0
@@ -150,29 +152,49 @@ cache backend.
   splitting ownership of `issueRef`. Model strings also make poor filenames —
   against an OpenAI-compatible endpoint the name is whatever the server reports,
   and the same weights answer to different names on different hosts.
-- **A model change retires `uncertain` entries only.** `model` is load-bearing
-  in `Lookup` for that one class:
-  - `uncertain` is a non-answer. Re-deciding it under the new model costs one
-    triage and can only improve on nothing, so a swap is a reason to retry.
-  - `benign` and `exploitable` survive. The invalidation contract is cited
-    evidence + codeHash — a claim about the code, which says nothing about who
-    read it. `Lookup` already ignores `decidedAt` for the same reason: a verdict
-    does not expire because time passed, and model identity is the same kind of
-    metadata. Re-running a decided verdict re-confirms at full price in the good
-    case, and lets a weaker model overturn a stronger one's work in the bad one
-    — and swap *direction* is not knowable without a model ranking, which would
-    encode a claim the tool cannot verify and that goes stale every release.
-  - Asymmetry rationale: a false `exploitable` costs an issue a human closes; a
-    false `benign` costs a shipped vulnerability plus an audit trail claiming it
-    was reviewed. Keeping `exploitable` across a swap is therefore the safe
-    direction, and it preserves `issueRef` rather than leaning on the
-    label-listing fallback every run.
+- **The decider lives in the entry, never in the key.** `model`, `effort` and
+  `agentVersion` record who reached a verdict, how deeply they were allowed to
+  look, and under which generation of `internal/policy`'s rules. Folding any of
+  them into the key would make every finding a fresh miss the moment one
+  changed, re-triaging the entire cache to re-derive verdicts that mostly still
+  hold. Held as fields, they let `Lookup` retire exactly the entries whose
+  trustworthiness the change bears on. `cache.Decider` carries the current
+  values; `Entry.retires` is the predicate.
+- **A decider change retires `benign` and `uncertain`; `exploitable` survives.**
+  The asymmetry is the point, and it follows the cache-safety invariant rather
+  than cutting across it:
+  - `benign` is the only verdict that makes a finding disappear silently, so it
+    is the only one whose trustworthiness is load-bearing, and it is re-earned
+    whenever the thing that earned it changed. Superseded by: nothing — this is
+    the direction the invariant already points.
+  - `uncertain` is a non-answer. Re-deciding it costs one triage and can only
+    improve on nothing, so a change of decider is a reason to retry.
+  - `exploitable` survives every decider change. It fails loudly and costs a
+    human a look rather than a shipped vulnerability, so re-running it
+    re-confirms at full price in the good case and lets a weaker decider
+    overturn a stronger one's work in the bad one — and swap *direction* is not
+    knowable without a model ranking the tool cannot verify. Surviving also
+    preserves `issueRef` rather than leaning on the label-listing fallback.
+  - Cost: a model swap re-triages the benign and uncertain entries **in scope**,
+    not the whole cache. On a diff-scoped PR run that is a handful of findings.
+    A full-scope run after a swap is the expensive case, and it is the one where
+    paying is most clearly right.
+  - `effort` and `agentVersion` are **upgrade-only and grandfathered**: a run at
+    greater depth re-decides suppressions reached with less code in front of the
+    model, a shallower run reuses the deeper verdict rather than overwriting good
+    work with cheaper work, and entries predating either field are trusted rather
+    than retired — so introducing them did not re-triage the world once. The
+    preset *ordering* lives in `internal/cache` beside the comparison;
+    `internal/pipeline` owns what each preset means, and
+    `TestEffortPresetsAreRanked` pins the two together.
   - The control on a wrong `benign` is human review of its citations in the PR
     diff, not a second model's opinion. Re-asking with the prior verdict seeded
     would anchor the new model on the old one's conclusion — a confirmation-
     shaped prompt that costs tokens and buys a biased check.
-  - Short-circuit entries carry `model: "rule:short-circuit"` and are always
-    `benign`, so no model change reaches them.
+  - Short-circuit entries carry `model: "rule:short-circuit"` and no effort or
+    agent version, and are exempt: no decider change bears on a deterministic
+    rule, and retiring them would rewrite `decidedAt` on every run after a swap
+    — churn in the one diff that is the audit trail, bought for nothing.
 - Rationale for git over scanner-native suppression (ignore files, inline
   suppression comments): per-finding granularity, non-destructive (verdicts,
   not deletions), carries reason/evidence/timestamps, PR-reviewable diff =
@@ -266,6 +288,74 @@ cache backend.
   `_test.go` / testdata, context-free rule types (e.g. hardcoded credential —
   the evidence is the snippet itself).
 
+### 3b. Policy (`internal/policy`)
+
+The tool's own judgement, as distinct from the model's: which findings the agent
+is not trusted to dismiss however well it argued the case. Pure, no
+dependencies, table-tested without an LLM anywhere near it.
+
+- **Empty by default; nothing is barred until the operator names it.** The tool
+  ships no opinion about which CWE classes a given repo can afford to
+  auto-suppress, because that depends on what the code does and who is on the
+  hook for it — an internal batch job and a public payments API do not get the
+  same answer, and a list compiled into a binary cannot know which one it is
+  running against. Shipping the measurement as an imposed default would also
+  make the tool's behaviour change under people on a version bump, in the
+  direction of "more findings block your build", which is how a security tool
+  loses the room. What the tool owes instead: make the choice cheap to express,
+  immediate to take effect, and impossible to get silently wrong.
+- **The measurement is documented, not imposed.** Against BenchmarkJava the
+  agent produces zero silent suppressions on injection, path traversal, weak
+  randomness and the crypto classes — those it reasons about correctly, because
+  the evidence is a data flow it can follow. It fails where exploitability turns
+  on a trust boundary or a configuration convention not visible in the code it
+  can read: trust-boundary violation (25 false benigns), weak hashing (12),
+  command injection (4), insecure cookies (1). README publishes that as a
+  copy-pasteable starting point — `CWE-78,CWE-327,CWE-328,CWE-501,CWE-614` — for
+  operators who want it.
+- **Keyed on CWE, not rule id.** Rule ids are specific to one scanner and one
+  ruleset and change underneath you; the CWE mapping travels through SARIF from
+  opengrep, semgrep and CodeQL alike and survives both a scanner swap and a
+  change of language. `internal/sarif` parses both spellings in the wild:
+  `"CWE-89: <title>"` (semgrep, opengrep) and `"external/cwe/cwe-089"` (CodeQL).
+- **One input: `-no-suppress-cwe CWE-502,CWE-611`.** It is the whole list, not
+  an addition to a hidden one, so what a run enforces is exactly what someone
+  typed. `CWE-502`, `cwe-502` and bare `502` are all accepted and normalised.
+  The run logs the active list on stderr — including when it is empty — because
+  a policy whose effect nobody can see is one nobody trusts, and "did my flag
+  take?" must not require reading a cache diff to answer.
+- **Malformed input fails the run.** A no-suppress list is invisible when it
+  works, so an entry that matches nothing presents exactly as a repo with no
+  dangerous findings — the failure this package exists to prevent. A typo exits
+  2 rather than being skipped. This is the one place the package is strict, and
+  it is strict because the alternative is silent.
+- `Config.Policy` is a nil-safe `*Policy` whose zero value bars nothing, so the
+  default costs no defaulting logic: "nobody configured this" and "the shipped
+  behaviour" are the same state rather than two that could drift apart.
+- **The list is versioned with the tool, not with the cache.** Editing it needs
+  no cache
+  migration and no `AgentVersion` bump: because policy is applied where a
+  verdict is used, adding a CWE stops those suppressions on the next run and
+  removing one restores them, both on entries already cached. `AgentVersion` is
+  for changes that make a cached verdict itself untrustworthy — the system
+  prompt, the evidence bar, the short-circuit tiers — and bumping it for a list
+  edit would re-triage every benign entry to re-derive a verdict that gets
+  overridden anyway.
+- **Barred `benign` becomes `uncertain`, never `exploitable`.** Policy knows the
+  agent is unreliable here, which is a reason to withhold the suppression, not
+  evidence of a vulnerability. The agent's own reasoning is kept in the reason
+  string: the list bars a class, not this finding, and the human who now holds
+  the decision is better served reading it.
+- **Applied where a verdict is USED, not where one is minted** (`itemFromEntry`,
+  which every item passes through, cached and fresh alike). Two consequences,
+  both wanted: the cache keeps recording what the agent actually concluded, so
+  its diff stays an honest audit trail; and a rules change takes effect on
+  entries already in the cache without re-triaging anything.
+- Generating the list from a scoring harness (`sast-triage calibrate`) was
+  considered and deferred: it needs BenchmarkJava, a scoring harness and
+  per-model runs, which is a research tool rather than something to drag into
+  the shipped binary. Four CWEs are not the maintenance bottleneck yet.
+
 ### 4. Outputs
 
 The binary's contract: reads SARIF + cache; writes report + updated cache;
@@ -353,13 +443,46 @@ returns exit code. No hidden state.
   one PR, the cache outlives every PR). A line outside the diff is a routine
   skip, not a failure, and every comment failure degrades to a log line:
   commenting must never fail a run or mask the gate.
+- With `-pr <n>`, one conversation comment names what the change proposes to
+  suppress: the count, a bounded table of rule/location/reason, and a link to
+  the cache file inside the PR's own diff. This is the answer to the objection
+  the whole design exists to survive — "a tool that auto-dismisses findings
+  hides real vulnerabilities". It does not hide them; it writes every dismissal
+  down, with reason and cited evidence, into a file in this PR's diff, and then
+  says so where the review is happening rather than in an artifact someone has
+  to think to open. Three decisions:
+  - **This run's suppressions, not the repo's.** "3 findings suppressed by this
+    change" is a claim a reviewer can act on in thirty seconds; "412 findings
+    are suppressed in this repo" is a number nobody can do anything with. Cached
+    suppressions were approved in an earlier PR and are not re-listed.
+  - **Silent when nothing new is suppressed.** A bot that comments on every run
+    regardless is one people filter out, taking the runs that mattered with it.
+  - **One comment per head commit**, keyed by a marker carrying the SHA: a
+    re-run on the same head is a no-op, a new push gets its own comment.
+  - Policy overrides are listed separately in the same comment — the agent said
+    `benign`, the tool declined to accept it — so a jump in `uncertain` is
+    traceable to a rules change rather than looking like the model got worse.
 - Exit codes: 0 success; 1 pipeline failure; 2 usage error; 3 gate tripped.
   The gate is `-mode enforce` + at least one `exploitable` finding in scope,
   and `enforce` is the default (forgetting a flag must not silently disable
   gating). Two decisions:
-  - **Exploitable only.** Gating on `uncertain` would fire on every budget
-    exhaustion and every ambiguity. A gate that fires on noise is a gate that
-    gets disabled within a week, and then nothing is gated.
+  - **Exploitable by default; `uncertain` only when asked for.** Gating on
+    `uncertain` unprompted would fire on every budget exhaustion and every
+    ambiguity. A gate that fires on noise is a gate that gets disabled within a
+    week, and then nothing is gated. `-fail-on exploitable,uncertain` opts in
+    for operators who want unresolved findings to block, and even then
+    budget-deferred findings are excluded (`Summary.GatingUncertain`): the
+    budget running out is the tool failing to look, not a claim about the code,
+    and gating on it makes the exit code a function of queue length.
+  - **The no-suppress CWE list deliberately does NOT imply strict gating.** The
+    two rules look like they belong together and do not. Barring a suppression
+    moves every `benign` in the class to `uncertain` — the correct ones as well
+    as the wrong ones, since policy bars a class rather than a finding — so
+    gating that same class would fail the build on every finding in it. What the
+    bar already buys without gating: those findings are unsuppressed, in the
+    report, and unsuppressed in the SARIF uploaded to Code Scanning. The silent
+    path is closed. Failing the build on top of that is a louder policy, so it
+    is a separate, explicit input.
   - **Cached exploitables count.** The rejected alternative — gate only on
     verdicts decided this run — makes the exit code a function of cache state,
     so the same code passes or fails depending on whether a cache update merged
@@ -458,6 +581,8 @@ advisory-only, does not gate, and says to seed first.
 - "Deterministic pipeline with a bounded, read-only agent loop in the triage
   stage — the LLM gets judgment, not control."
 - "Suppression is keyed to the evidence, not the finding."
+- "Only benign disappears silently, so only benign has to be re-earned."
+- "The tool doesn't hide what it dismissed; it writes it into your PR diff."
 - "The agent's memory is version-controlled and PR-reviewable."
 - "I didn't make the model reliable; I made the system safe under an
   unreliable model."

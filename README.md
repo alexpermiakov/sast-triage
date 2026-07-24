@@ -239,7 +239,9 @@ sast-triage -provider anthropic -model claude-sonnet-5 \
 
 ## What you get
 
-- ✅ **A gate that only fires on `exploitable`** (`mode: enforce`, exit 3) — never on `uncertain`, never on the backlog. A gate that fires on noise is a gate that gets disabled in a week, so this one doesn't
+- ✅ **A gate that only fires on `exploitable`** (`mode: enforce`, exit 3) — never on `uncertain`, never on the backlog. A gate that fires on noise is a gate that gets disabled in a week, so this one doesn't. Want the strict version? `fail-on: exploitable,uncertain` opts in, and findings your run budget never reached still don't gate
+- ✅ **Every suppression announced in the PR** (`pr-comments: true`) — one comment saying "3 findings suppressed by this change", each with the reason, linked to the cache diff where you can veto it. The tool doesn't hide what it dismissed; it writes it into your diff
+- ✅ **Classes you can forbid it from auto-dismissing** — `no-suppress-cwe: "CWE-501,CWE-327"` and a `benign` on those becomes `uncertain` and stays visible. Empty by default: the tool ships no opinion about what your repo can afford to auto-suppress. Keyed on CWE so it survives a scanner swap, and a typo fails the run rather than silently matching nothing. Measured starting point below if you want one
 - ✅ **Filtered SARIF on every run** (`triaged.sarif`, on by default) — benign findings are relabelled via `suppressions[]`, never deleted. Upload it to the Security tab with `github/codeql-action/upload-sarif`, or hand it to DefectDojo
 - ✅ **Inline PR comments** (`pr-comments: true`) — the verdict, the reasoning, and the cited evidence land on the diff line, where the review already is
 - ✅ **`triage-report.md`** — every verdict with its reasoning and clickable `file:line` evidence, proposed suppressions first so vetoing one is a 30-second action. Complete and uncapped; keep it with `actions/upload-artifact`
@@ -281,6 +283,8 @@ The GitHub Action exposes every flag as an input of the same name, minus the lea
 | `-scope`               | `full`                    | `full` (everything in the SARIF) or `diff` (only findings in changed files)                |
 | `-base-ref`            | —                         | Base to diff against for `-scope diff`, e.g. `origin/main`. Required with it               |
 | `-mode`                | `enforce`                 | `enforce` (exit 3 on exploitables in scope), `report` (advisory), `baseline` (seeding)     |
+| `-fail-on`             | `exploitable`             | Classes `enforce` fails on; `exploitable,uncertain` also fails on unresolved findings      |
+| `-no-suppress-cwe`     | —                         | CWEs the agent may not dismiss as benign, e.g. `CWE-502,CWE-611`. Empty bars nothing       |
 | `-sarif-file`          | `findings.sarif`          | SARIF 2.1.0 input                                                                          |
 | `-repo`                | `.`                       | Repository root the findings refer to                                                      |
 | `-cache`               | `.sast-triage/cache.json` | Verdict cache (commit it to git)                                                           |
@@ -303,6 +307,32 @@ Two action inputs have no flag behind them, because they are git plumbing rather
 The action also takes `api-key` (routed to whichever provider you selected), plus `anthropic-api-key` / `openai-api-key` if you'd rather be explicit.
 
 **Exit codes:** `0` success (whatever the verdicts), `1` tool failure, `2` usage error, `3` gate tripped — `-mode enforce` found exploitable findings in scope.
+
+</details>
+
+<details>
+<summary><b>Classes to consider never auto-suppressing</b> — a measured starting point for <code>no-suppress-cwe</code></summary>
+
+Nothing is barred by default. The tool has no way to know whether your repo is an internal batch job or a public payments API, so it doesn't pick for you — but here is the measurement, and you can copy it.
+
+Triaged against [BenchmarkJava](https://github.com/OWASP-Benchmark/BenchmarkJava), the agent produces **zero silent suppressions** on injection, path traversal, weak randomness and the crypto classes. Those it reasons about correctly, because the evidence is a data flow it can follow from source to sink.
+
+It is unreliable where exploitability turns on a trust boundary or a configuration convention that isn't visible in the code it can read:
+
+| Class                    | CWE               | False `benign` verdicts |
+| ------------------------ | ----------------- | ----------------------- |
+| Trust-boundary violation | CWE-501           | 25                      |
+| Weak hashing             | CWE-327 / CWE-328 | 12                      |
+| Command injection        | CWE-78            | 4                       |
+| Insecure cookie          | CWE-614           | 1                       |
+
+```yaml
+no-suppress-cwe: "CWE-78,CWE-327,CWE-328,CWE-501,CWE-614"
+```
+
+A `benign` on any of those is recorded as `uncertain` instead: the finding stays visible in the report, stays unsuppressed in the SARIF you upload to Code Scanning, and the agent's own reasoning is kept alongside it so whoever decides has something to read. It does **not** fail your build unless you also set `fail-on: exploitable,uncertain` — those two are deliberately separate, because barring a class moves every `benign` in it to `uncertain`, the correct ones included.
+
+Changing the list costs nothing: it is applied when a verdict is read, so adding a CWE stops those suppressions on the next run — including for findings already sitting in your cache — with no re-triage and no cache migration.
 
 </details>
 
@@ -380,6 +410,8 @@ Whatever your scanner scans. The agent doesn't parse code — it reads it the wa
 <summary><strong>What makes a PR fail, and who approves verdicts?</strong></summary>
 
 A PR fails when `mode: enforce` and the run finds an **exploitable** verdict in scope (exit 3). Never on `uncertain`, never on `benign`, and never on findings outside the change — `scope: diff` means the gate only ever considers files the PR touched. That is what makes it a gate people leave on.
+
+If you want unresolved findings to block too, `fail-on: exploitable,uncertain` says so explicitly. Findings the run budget never reached are still excluded even then: the budget running out is the tool failing to look, not a claim about your code, and a gate whose exit code depends on queue length is not one you can reason about. Note that this is deliberately *not* implied by the no-suppress CWE list — that list moves every `benign` in those classes to `uncertain`, the correct ones included, so gating on it would fail your build on every trust-boundary finding in the repo.
 
 Note what the gate does _not_ depend on: whether a verdict was decided this run or came from the cache. Making the exit code a function of cache state means the same code passes or fails depending on who merged a cache update first, and a wiped cache turns your whole backlog into "new". Scope is what keeps the backlog out, not cache freshness.
 

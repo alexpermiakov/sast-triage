@@ -48,7 +48,7 @@ func TestRunDiffScope(t *testing.T) {
 	// The gate sees one benign finding and nothing else: a change confined to
 	// files with no exploitable findings must not fail, whatever the untriaged
 	// backlog elsewhere in the repo looks like.
-	if fail, _ := Gate(ModeEnforce, s); fail {
+	if fail, _ := Gate(ModeEnforce, DefaultFailOn, s); fail {
 		t.Error("diff-scoped run gated on findings outside the change")
 	}
 }
