@@ -28,6 +28,32 @@ const (
 	VerdictUncertain   = "uncertain"
 )
 
+// ModelShortCircuit is the model recorded on entries decided by pure rule
+// rather than by a model. They are exempt from decider retirement: no model,
+// effort or agent-version change bears on a deterministic rule, and retiring
+// them would rewrite decidedAt on every run after a swap — churn in the one
+// diff that is the audit trail, bought for nothing, since re-deciding a
+// short circuit costs no tokens anyway.
+const ModelShortCircuit = "rule:short-circuit"
+
+// effortRanks orders the triage-depth presets weakest to strongest. The names
+// are pipeline's (see internal/pipeline/effort.go, which owns what each one
+// means in read/grep/token/iteration bounds), but the ORDER lives here because
+// this is where two of them get compared: an entry's recorded effort against
+// the running one. Rank 0 means absent or unknown — see Decider.
+//
+// TestEffortPresetsAreRanked in internal/pipeline pins the two lists together.
+var effortRanks = map[string]int{
+	"small":  1,
+	"medium": 2,
+	"large":  3,
+	"xlarge": 4,
+}
+
+// EffortRank returns the ordinal for a triage-depth preset name, or 0 when the
+// name is empty or not one this binary knows.
+func EffortRank(name string) int { return effortRanks[name] }
+
 // Cache is the on-disk triage cache. Entries are keyed by matchBasedId
 // fingerprint; all verdict classes are stored (exploitable verdicts are memory
 // too — otherwise they would be re-triaged nightly forever).
@@ -37,19 +63,70 @@ type Cache struct {
 }
 
 // Entry is one cached verdict. A verdict is a fact about the code it read, so
-// CodeHash covers the flagged region plus every evidence region. Model is
-// load-bearing for uncertain entries only — see Lookup.
+// CodeHash covers the flagged region plus every evidence region.
+//
+// Model, Effort and AgentVersion are the decider: who reached this verdict, how
+// deeply they were allowed to look, and under which generation of the tool's
+// own rules. They are recorded on the entry rather than folded into the key,
+// because a key carrying them would make every finding a fresh miss on any
+// change and re-triage the whole cache. Held as fields, they let Lookup retire
+// exactly the entries whose trustworthiness the change actually bears on — see
+// Lookup.
 type Entry struct {
-	RuleID     string   `json:"ruleId"`
-	File       string   `json:"file"`
-	Verdict    string   `json:"verdict"` // benign | exploitable | uncertain
-	Reason     string   `json:"reason"`
-	Evidence   []string `json:"evidence"` // "path:line" or "path:line-line"
-	CodeHash   string   `json:"codeHash"` // "sha256:..."
-	Model      string   `json:"model"`
-	DecidedAt  string   `json:"decidedAt"` // RFC3339
-	TokensUsed int      `json:"tokensUsed"`
-	IssueRef   int      `json:"issueRef,omitempty"`
+	RuleID       string   `json:"ruleId"`
+	File         string   `json:"file"`
+	Verdict      string   `json:"verdict"` // benign | exploitable | uncertain
+	Reason       string   `json:"reason"`
+	Evidence     []string `json:"evidence"` // "path:line" or "path:line-line"
+	CodeHash     string   `json:"codeHash"` // "sha256:..."
+	Model        string   `json:"model"`
+	Effort       string   `json:"effort,omitempty"`       // triage-depth preset this was decided at
+	AgentVersion int      `json:"agentVersion,omitempty"` // policy.AgentVersion at decision time
+	DecidedAt    string   `json:"decidedAt"`              // RFC3339
+	TokensUsed   int      `json:"tokensUsed"`
+	IssueRef     int      `json:"issueRef,omitempty"`
+}
+
+// Decider describes who is asking, so Lookup can tell whether an entry was
+// decided under weaker conditions than the current run offers.
+//
+// Effort and AgentVersion are upgrade-only and grandfathered: an entry that
+// predates either field (rank 0, version 0) is trusted rather than retired,
+// so introducing them costs nothing, and a run at LOWER effort than the cached
+// verdict reuses it rather than overwriting good work with cheaper work.
+type Decider struct {
+	Model        string
+	Effort       string
+	AgentVersion int
+}
+
+// retires reports whether a decider change invalidates this entry.
+//
+// exploitable never retires. It is the one verdict that fails loudly and costs
+// a human a look rather than a shipped vulnerability, and re-running it
+// re-confirms at full price in the good case while letting a weaker decider
+// overturn a stronger one's work in the bad case.
+//
+// benign and uncertain both retire, for the same reason from opposite ends:
+// benign silently suppresses a finding, so it is the one verdict that must be
+// re-earned whenever the thing that earned it changed; uncertain is a
+// non-answer, so re-deciding it costs one triage and can only improve on
+// nothing. Between them they are every verdict that leaves a finding out of
+// the gate's way.
+func (e Entry) retires(d Decider) bool {
+	if e.Verdict == VerdictExploitable || e.Model == ModelShortCircuit {
+		return false
+	}
+	if e.Model != d.Model {
+		return true
+	}
+	if e.AgentVersion != 0 && e.AgentVersion < d.AgentVersion {
+		return true
+	}
+	if r := EffortRank(e.Effort); r != 0 && EffortRank(d.Effort) > r {
+		return true
+	}
+	return false
 }
 
 // Key identifies the finding a lookup is for. The fingerprint is the map key,
@@ -178,14 +255,10 @@ func (c *Cache) Save(path string) error {
 // money, never safety — every path out of here that is not a fully verified
 // entry returns false, and the caller then pays for a fresh triage.
 //
-// Deciding under a different model retires uncertain entries only. uncertain is
-// a non-answer, so re-deciding it costs one triage and can only improve on
-// nothing. benign and exploitable survive the swap: their invalidation contract
-// is cited evidence plus codeHash, which is a claim about the code and says
-// nothing about who read it. Re-running them would re-confirm at full price in
-// the good case and let a weaker model overturn a stronger one's work in the
-// bad case — and the swap direction is not knowable here. See docs/DESIGN.md.
-func (c *Cache) Lookup(k Key, repoRoot string, flagged Region, model string) (Entry, bool) {
+// A change of decider — model, effort preset, or agent version — retires
+// benign and uncertain entries and spares exploitable ones. The asymmetry is
+// the point, and Entry.retires carries the reasoning. See docs/DESIGN.md.
+func (c *Cache) Lookup(k Key, repoRoot string, flagged Region, d Decider) (Entry, bool) {
 	e, ok := c.Entries[k.Fingerprint]
 	if !ok {
 		return Entry{}, false
@@ -198,7 +271,7 @@ func (c *Cache) Lookup(k Key, repoRoot string, flagged Region, model string) (En
 	}
 	// Checked before hashing: a retired entry is a miss whatever the code says,
 	// and this skips reading every evidence region to prove it.
-	if e.Verdict == VerdictUncertain && e.Model != model {
+	if e.retires(d) {
 		return Entry{}, false
 	}
 	// The evidence bar again, at the trust boundary. The agent already refuses

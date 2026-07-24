@@ -85,7 +85,7 @@ func TestDamagedEntryNeverSuppresses(t *testing.T) {
 			// must be rejected on that axis, not on a mismatched rule or file.
 			tt.entry.RuleID, tt.entry.File = id.RuleID, id.File
 			c := &Cache{Version: Version, Entries: map[string]Entry{id.Fingerprint: tt.entry}}
-			e, ok := c.Lookup(id, root, flagged, "model-a")
+			e, ok := c.Lookup(id, root, flagged, Decider{Model: "model-a"})
 			if ok {
 				t.Fatalf("damaged entry returned as a hit: %+v", e)
 			}
@@ -137,7 +137,7 @@ func TestEntryForAnotherFindingNeverSuppresses(t *testing.T) {
 	for name, entry := range tests {
 		t.Run(name, func(t *testing.T) {
 			c := &Cache{Version: Version, Entries: map[string]Entry{asked.Fingerprint: entry}}
-			if e, ok := c.Lookup(asked, root, flagged, "model-a"); ok {
+			if e, ok := c.Lookup(asked, root, flagged, Decider{Model: "model-a"}); ok {
 				t.Fatalf("another finding's verdict returned as a hit: %+v", e)
 			}
 		})
@@ -148,7 +148,7 @@ func TestEntryForAnotherFindingNeverSuppresses(t *testing.T) {
 	entry := valid
 	entry.RuleID, entry.File = asked.RuleID, asked.File
 	c := &Cache{Version: Version, Entries: map[string]Entry{asked.Fingerprint: entry}}
-	if _, ok := c.Lookup(asked, root, flagged, "model-a"); !ok {
+	if _, ok := c.Lookup(asked, root, flagged, Decider{Model: "model-a"}); !ok {
 		t.Error("matching identity: want hit")
 	}
 }
@@ -164,7 +164,7 @@ func TestWipedCacheCostsMoneyNotSafety(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a missing cache must load as empty, not fail: %v", err)
 	}
-	if _, ok := c.Lookup(Key{Fingerprint: "fp1", RuleID: "go.sqli", File: "app/handlers.go"}, root, flagged, "model-a"); ok {
+	if _, ok := c.Lookup(Key{Fingerprint: "fp1", RuleID: "go.sqli", File: "app/handlers.go"}, root, flagged, Decider{Model: "model-a"}); ok {
 		t.Error("a wiped cache produced a hit")
 	}
 }
@@ -185,7 +185,7 @@ func TestEmptyCacheFileCostsMoneyNotSafety(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an empty cache file must load as empty, not fail: %v", err)
 	}
-	if _, ok := c.Lookup(Key{Fingerprint: "fp1", RuleID: "go.sqli", File: "app/handlers.go"}, root, flagged, "model-a"); ok {
+	if _, ok := c.Lookup(Key{Fingerprint: "fp1", RuleID: "go.sqli", File: "app/handlers.go"}, root, flagged, Decider{Model: "model-a"}); ok {
 		t.Error("an empty cache file produced a hit")
 	}
 }

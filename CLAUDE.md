@@ -28,7 +28,17 @@ internal/
                      a pure filter over findings. Matches the FLAGGED location
                      only, never taint-trace hops
   cache/             .sast-triage/cache.json load/save, fingerprint+codeHash
-                     matching
+                     matching. Owns the effort-preset ORDERING (pipeline owns
+                     what each preset means), because this is where two of them
+                     are compared
+  policy/            the tool's own judgement, not the model's: the no-suppress
+                     CWE list + AgentVersion. Pure, no deps. EMPTY by default —
+                     the tool ships no opinion about what a repo can afford to
+                     auto-suppress; -no-suppress-cwe is the whole list, not an
+                     addition to a hidden one. A malformed CWE fails the run
+                     rather than silently matching nothing. *Policy is nil-safe
+                     and its zero value bars nothing, so "unconfigured" and
+                     "the shipped default" are one state, not two
   agent/             the LLM loop: client, tools, budgets, verdict parsing.
                      Provider adapters behind one Client iface: openai.go (any
                      OpenAI-compatible endpoint, net/http only) and anthropic.go
@@ -44,8 +54,10 @@ internal/
                      tool_calls array empty) — parsed only when that array is
                      empty, so a compliant endpoint is never second-guessed.
   report/            triage-report.md rendering, GitHub issue + PR comment bodies
-  github/            minimal Issues + PR-review REST client (issue dedupe owned
-                     by cache issueRef; comment dedupe by fingerprint marker)
+  github/            minimal Issues + PR-review + PR-conversation REST client
+                     (issue dedupe owned by cache issueRef; inline-comment
+                     dedupe by fingerprint marker; suppression-summary dedupe by
+                     a marker carrying the head SHA, one comment per commit)
   pipeline/          run orchestration: scope, partition, budget, errgroup
                      fan-out, single-writer merge, issue + comment routing.
                      mode.go owns the exit decision (Gate)
@@ -101,10 +113,17 @@ scan, and their line numbers are pinned to unit tests.
   fake client replaying canned tool-use transcripts.
 - **Cache invalidation**: `codeHash` = sha256 over the flagged region PLUS all
   evidence regions the verdict cited. Any drift in any of them invalidates the
-  entry. Never key invalidation on the flagged line alone. A model change
-  additionally retires `uncertain` entries and only those — `benign` and
-  `exploitable` are claims about the code and survive the swap. One cache file,
+  entry. Never key invalidation on the flagged line alone. One cache file,
   mixed models; never partition the cache by model.
+- **The decider is a field, never part of the key**: `model`, `effort`,
+  `agentVersion` live on the entry. A decider change retires `benign` and
+  `uncertain` and spares `exploitable` — benign is the only verdict that
+  suppresses silently, so it is the only one that must be re-earned; uncertain
+  is a non-answer worth re-deciding for free; exploitable already fails loudly,
+  and re-running it only lets a weaker decider overturn a stronger one.
+  `effort` and `agentVersion` are upgrade-only and grandfathered (absent =
+  trusted), so a lower-effort run never overwrites a deeper run's work.
+  Short-circuit entries are exempt from all of it. See `Entry.retires`.
 - **Cache-safety invariant**: a missing, damaged, or unverifiable entry means
   RE-TRIAGE, never `benign`. `Lookup` re-checks the evidence bar at the trust
   boundary (the file is hand-editable in git), so evidence-free `benign`,
@@ -122,11 +141,27 @@ scan, and their line numbers are pinned to unit tests.
 - **Scope and gating are two explicit axes**: `-scope diff|full` decides what is
   triaged, `-mode enforce|report|baseline` decides whether it can fail the
   build. Never infer either from the other, from the trigger, or from cache
-  presence. The gate fires on `exploitable` only — never `uncertain`, or it
-  becomes the gate everyone disables — and counts cached exploitables, because
-  an exit code that depends on cache freshness is not reproducible. The single
-  exception, which only relaxes the gate and must stay loud on stderr: an
-  unseeded repo reports instead of failing.
+  presence. The gate fires on `exploitable` by default — never `uncertain`
+  unless `-fail-on exploitable,uncertain` asks for it, or it becomes the gate
+  everyone disables — and counts cached exploitables, because an exit code that
+  depends on cache freshness is not reproducible. The single exception, which
+  only relaxes the gate and must stay loud on stderr: an unseeded repo reports
+  instead of failing.
+- **No-suppress ≠ gating.** `internal/policy` bars `benign` on operator-named
+  CWE classes, turning them into `uncertain`. That must NOT imply strict gating
+  for those classes: the bar moves every benign in the class — the correct ones
+  too — so gating them would fail the build on every finding in the class.
+  Barring already closes the silent path (unsuppressed in the report and in the
+  uploaded SARIF); failing the build is a separate opt-in.
+- **The tool ships no security policy of its own.** The no-suppress list is
+  empty until an operator names classes. Measurements (which classes triage is
+  unreliable on) belong in README as a copy-pasteable recommendation, never as
+  a compiled-in default: a version bump must not silently change which findings
+  block someone's build.
+- **Policy applies where a verdict is USED, not where it is minted.** The cache
+  records what the agent actually concluded, so the diff stays an honest audit
+  trail and a rules change takes effect on existing entries without re-triage.
+  `itemFromEntry` is the one chokepoint; never add a path around it.
 - **The cache is never bot-PR'd onto a protected branch**: PR runs commit the
   delta to the PR's own head branch (`cache-write: branch`); `cache-write: pr`
   is for seeding only. Fork PRs and missing secrets degrade to artifact-only
@@ -140,8 +175,8 @@ scan, and their line numbers are pinned to unit tests.
 
 ## Testing
 
-- Table tests for `sarif`, `cache`, `report`, `scope` against fixtures in
-  `testdata/`. `scope` and the pipeline's diff tests build throwaway git repos
+- Table tests for `sarif`, `cache`, `report`, `scope`, `policy` against fixtures
+  in `testdata/`. `scope` and the pipeline's diff tests build throwaway git repos
   with `exec.Command` and skip when git is unavailable.
 - `internal/agent` tests: fake Anthropic client with scripted tool_use sequences,
   covering: shortest legal resolve (one read, then verdict), multi-turn

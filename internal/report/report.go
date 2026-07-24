@@ -3,6 +3,8 @@
 package report
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -21,14 +23,22 @@ type Item struct {
 	Level       string
 	Message     string
 
-	Verdict      string
-	Reason       string
-	Evidence     []string
-	Cached       bool // verdict came from the cache, not a fresh LLM run
-	ShortCircuit bool // decided by pure rule
-	Deferred     bool // run budget exhausted before this finding was triaged
-	TokensIn     int
-	TokensOut    int
+	CWEs []string // normalised "CWE-89" ids the rule maps to
+
+	Verdict string
+	Reason  string
+	// PolicyOverride marks a verdict internal/policy changed after the agent
+	// reached it — today, a benign on a CWE class the tool does not accept
+	// suppressions for. Verdict already holds the override; this says the
+	// agent's own conclusion was something else, which a reader weighing the
+	// finding needs to know.
+	PolicyOverride bool
+	Evidence       []string
+	Cached         bool // verdict came from the cache, not a fresh LLM run
+	ShortCircuit   bool // decided by pure rule
+	Deferred       bool // run budget exhausted before this finding was triaged
+	TokensIn       int
+	TokensOut      int
 	// ToolCalls is how much code the model read to reach this verdict, tracked
 	// alongside the tokens it spent: a run whose verdicts cost tokens but made
 	// no tool calls is a provider silently ignoring the tools, which no token
@@ -548,6 +558,109 @@ func IssueBody(it Item, opts Options) string {
 	}
 	fmt.Fprintf(&b, "\n%s\n", FingerprintMarker(it.Fingerprint))
 	return b.String()
+}
+
+// SuppressionMarker is the machine-readable marker on the suppression summary
+// comment. It carries the head SHA, which sets the granularity deliberately:
+// one comment per commit triaged, so a re-run on the same head is a no-op and a
+// new push gets its own comment describing what that push proposes to suppress.
+func SuppressionMarker(commitSHA string) string {
+	return fmt.Sprintf("<!-- sast-triage:suppressions:%s -->", commitSHA)
+}
+
+// suppressionMaxRows bounds the table for the same reason summaryMaxRows does,
+// and lower: this comment lands in a PR conversation people scroll past.
+const suppressionMaxRows = 10
+
+// CacheDiffURL points at the cache file inside a pull request's diff — the
+// place a reviewer can actually read and veto the suppressions this run
+// proposes. Empty repo or PR yields "", and callers omit the link.
+//
+// The #diff- anchor is GitHub's per-file target, the sha256 of the file's path.
+// It is undocumented and may drift; the /files URL before it is the part that
+// has to work, and does on its own if the anchor ever stops resolving.
+func CacheDiffURL(repoSlug string, pr int, cachePath string) string {
+	if repoSlug == "" || pr <= 0 {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(cachePath))
+	return fmt.Sprintf("https://github.com/%s/pull/%d/files#diff-%s", repoSlug, pr, hex.EncodeToString(sum[:]))
+}
+
+// SuppressionComment renders the pull-request conversation comment announcing
+// what this run proposes to suppress, and returns "" when there is nothing to
+// announce.
+//
+// This is the answer to the objection the whole design exists to survive —
+// "a tool that auto-dismisses findings hides real vulnerabilities". It does not
+// hide them: it writes down every dismissal, with the reason and the cited
+// evidence, into a file that is part of this PR's diff, and then says so in the
+// PR itself. The count is of suppressions this change PROPOSES, not of every
+// suppression in the repo, because the first is a claim a reviewer can act on
+// in thirty seconds and the second is a number nobody can do anything with.
+//
+// Cached suppressions are excluded for that reason: they were approved in an
+// earlier PR and re-listing them every run trains people to skim the comment.
+func SuppressionComment(items []Item, opts Options, commitSHA, cacheDiffURL string) string {
+	var fresh, overridden []Item
+	for _, it := range items {
+		switch {
+		case it.Verdict == "benign" && !it.Cached:
+			fresh = append(fresh, it)
+		case it.PolicyOverride && !it.Cached:
+			overridden = append(overridden, it)
+		}
+	}
+	if len(fresh) == 0 && len(overridden) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n", SuppressionMarker(commitSHA))
+	if len(fresh) > 0 {
+		fmt.Fprintf(&b, "### %s suppressed by this change\n\n", plural(len(fresh), "finding"))
+		fmt.Fprintf(&b, "Automated triage judged %s benign. The verdicts are written to `%s`, which is in this PR's diff — **merging approves them.**\n\n",
+			pronounFor(len(fresh)), cacheFileName)
+		b.WriteString("| Finding | Location | Why it was dismissed |\n|---|---|---|\n")
+		shown := min(len(fresh), suppressionMaxRows)
+		for _, it := range fresh[:shown] {
+			fmt.Fprintf(&b, "| `%s` | %s | %s |\n",
+				shortRule(it.RuleID), link(it.Location(), opts), cell(it.Reason))
+		}
+		if rest := len(fresh) - shown; rest > 0 {
+			fmt.Fprintf(&b, "\n_+%d more — the full list is in the cache diff and in `triage-report.md`._\n", rest)
+		}
+		b.WriteString("\nTo veto one: delete its entry from the cache file in this PR, or reject the PR. A deleted entry is re-triaged on the next run.\n")
+	}
+	if len(overridden) > 0 {
+		fmt.Fprintf(&b, "\n### %s not auto-suppressed\n\n", plural(len(overridden), "finding"))
+		b.WriteString("The agent judged these benign; policy does not accept a benign verdict for their CWE class, because triage of it is measurably unreliable. They are recorded as uncertain and stay unsuppressed.\n\n")
+		shown := min(len(overridden), suppressionMaxRows)
+		for _, it := range overridden[:shown] {
+			fmt.Fprintf(&b, "- `%s` at %s\n", shortRule(it.RuleID), link(it.Location(), opts))
+		}
+		if rest := len(overridden) - shown; rest > 0 {
+			fmt.Fprintf(&b, "- _+%d more._\n", rest)
+		}
+	}
+	if cacheDiffURL != "" {
+		fmt.Fprintf(&b, "\n[Review the cache diff](%s)\n", cacheDiffURL)
+	}
+	return b.String()
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+func pronounFor(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 // ReviewCommentBody renders one inline pull-request comment for an exploitable
