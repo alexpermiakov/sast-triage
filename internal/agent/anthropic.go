@@ -25,15 +25,11 @@ func NewAnthropicClient(apiKey, baseURL string) *AnthropicClient {
 	return &AnthropicClient{client: anthropic.NewClient(opts...)}
 }
 
-// Complete deliberately drops req.Temperature. The native API removed the
-// sampling parameters on the current Claude generation — Opus 4.8/4.7, Sonnet 5
-// and Fable 5 reject temperature, top_p and top_k with a 400 — so sending the
-// temperature 0 the loop asks for fails every call, and a run that fails every
-// call triages nothing. It is dropped outright rather than gated per model
-// because a per-model allowlist has to be right about models that do not exist
-// yet, and the failure mode of being wrong is the whole provider going dark.
-// The OpenAI-compatible adapter still honours it; determinism there is
-// unaffected.
+// Complete sends no sampling parameters. The project sends no temperature on any
+// provider — the native API would in any case reject one, having removed
+// temperature/top_p/top_k on the current Claude generation (Opus 4.8/4.7,
+// Sonnet 5, Fable 5 answer a 400). Steer this provider with the prompt and
+// -effort.
 func (a *AnthropicClient) Complete(ctx context.Context, req Request) (*Response, error) {
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(req.Model),

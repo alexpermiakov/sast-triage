@@ -208,23 +208,21 @@ cache backend.
   30k/60k/120k/240k, iteration cap 6/10/15/22. Medium is the default; explicit
   `-token-budget`/`-max-iterations` override the preset. Tool descriptions
   advertise the active caps.
-- Temperature is 0 on both adapters, with **no flag and no action input**.
-  Triage is the one nondeterministic stage and its output does not stay in the
-  stage: a verdict is committed to `cache.json` and gates builds under `-mode
-  enforce`, so sampling variance becomes a verdict that flips between runs on
-  unchanged code and a cache diff nobody can reproduce. 0 is the closest this
-  stage gets to the determinism every other stage has by construction, which
-  makes it the only defensible value — exposing a knob would only invite a
-  worse one, and a per-provider `-model-param` passthrough was rejected for the
-  same reason plus its unvalidatable, undocumentable vendor-specific key names.
-- Reasoning models commonly reject an explicit temperature with a 400, so a
-  hard-coded 0 must not be a wall. `OpenAIClient` retries once without the
-  field, latches the decision for the run (atomic — parallel workers share the
-  client), and says so once on stderr. The match is narrow on purpose: 400 only,
-  body naming the parameter. Any other 4xx stays fatal, so a genuinely
-  malformed request is never laundered into a silent retry. `Request.Temperature`
-  is a `*float64` because "temperature 0" and "no temperature field" are
-  different requests and the fallback needs both expressible.
+- No sampling parameters are sent on any adapter — **no temperature, no flag,
+  no action input**. A hard-coded temperature 0 (for the determinism triage's
+  cached, build-gating verdicts otherwise lack) was tried and removed: the
+  current Claude generation (Opus 4.8/4.7, Sonnet 5, Fable 5) rejects
+  temperature/top_p/top_k with a 400, and reasoning endpoints such as Kimi and
+  the o-series reject or fix it too, so on the providers that mattered the value
+  never took — it only produced a rejected-then-retried round trip per run.
+  Sending nothing steers every provider by prompt and `-effort` alone. The cost:
+  on a provider that *does* honour temperature (deepseek, ollama, local models)
+  a verdict can vary run-to-run, so a cache-gated build is no longer reproducible
+  from a cold cache. A per-provider `-model-param` passthrough remains rejected —
+  unvalidatable, undocumentable vendor-specific key names.
+- Any 4xx stays fatal and is never retried: a malformed request would be rebuilt
+  identically, so the endpoint's own message propagates rather than burning the
+  retry budget. Only 429 and 5xx are transient.
 - First prompt includes: rule background, finding message, flagged snippet, and
   the SARIF codeFlows trace as the starting map ("verify each hop"). The trace
   usually collapses the loop to 1–2 turns; the loop exists because required
@@ -243,20 +241,17 @@ cache backend.
   context-free and short-circuit tiers, offered none, are exempt. Uncertain
   verdicts are gated too: one rule, no exceptions to reason about, and "you gave
   up before reading anything" is worth one retry.
-- First-turn tool call is forced, not merely nudged after the fact: when tools
-  are offered, the opening turn sets `tool_choice` to "required" (OpenAI) / "any"
-  (Anthropic), then relaxes to auto/omitted so later turns can emit the verdict.
-  The gate above catches an evidence-free verdict *after* a wasted call; this
-  prevents the wasted call for a whole class of model. It was added for Kimi K3,
-  whose default `reasoning_effort` "max" reasons straight to a verdict and never
-  reaches for a tool under "auto" — the nudge alone left 13 of 16 findings
-  uncertain. It is provider-agnostic on purpose (not a K3 special-case, which
-  would be the per-model allowlist the temperature note rejects): forcing the
-  first call only strengthens the same evidence bar for every model, and Claude,
-  which already reads on turn 1, is unaffected. Guarded by "tools were offered",
-  so the context-free and short-circuit tiers never demand a call they were given
-  no tool to make. `Request.ForceToolUse` carries the intent; each adapter maps
-  it to its own wire form.
+- `tool_choice` stays "auto" on every turn; the nudge above is the only lever.
+  Forcing the first call (`tool_choice` "required"/"any" on the opening turn) was
+  tried for Kimi K3 — whose zero-tool-call runs left 13 of 16 findings uncertain —
+  and removed: Kimi does not document "required", and the real cause was not a
+  model declining to call but the *serving endpoint* emitting Kimi's calls as
+  delimiter tokens in message content (no `--tool-call-parser kimi_k2`), which the
+  client dropped. The fix lives in the adapter, not the loop: `openai.go` recovers
+  those tokens into tool_use blocks when the structured `tool_calls` array is
+  empty (see the openai.go note in CLAUDE.md), so a provider that "ignores tools"
+  is really a shape the client now understands. Diagnose with
+  `SAST_TRIAGE_DEBUG_HTTP=1`.
 - Tool calls per finding are reported next to tokens (per-finding log line, run
   summary). Tokens alone cannot distinguish a run that read the code from one
   that never opened a file; the pair is what makes a provider swap auditable.
