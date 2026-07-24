@@ -145,7 +145,7 @@ runs:
       if: ${{ !startsWith(github.action_path, github.workspace) }}
       shell: bash
       env:
-        SAST_TRIAGE_VERSION: v1.2.11
+        SAST_TRIAGE_VERSION: v1.2.12
         SAST_TRIAGE_REPO: alexpermiakov/sast-triage
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
