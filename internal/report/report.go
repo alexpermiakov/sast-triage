@@ -81,9 +81,13 @@ const (
 	deferredNote    = "Not triaged: the run budget was exhausted before these findings were reached. They carry no verdict and stay unsuppressed. The next run picks them up — completed verdicts are cached and free, so a re-run costs only what it newly triages. Raise -max-findings-budget to cover more per run, or narrow the scan."
 )
 
-// Render produces triage-report.md, sorted by required human scrutiny:
-// proposed suppressions (benign) first — veto must be a 30-second action —
-// then exploitable, then uncertain.
+// Render produces triage-report.md: exploitable first, then the proposed
+// suppressions (benign), then uncertain. Every rendering leads with what cannot
+// wait — a reader opening any surface this tool writes asks "is anything on
+// fire?" before "what is being suppressed?", and a report that answers the
+// second question first makes them scroll past the wall of suppressions to find
+// out. The benign veto workflow is not hurt by sitting second: it lives in the
+// cache diff of a pull request, and this section is the detail behind it.
 //
 // Deferred findings render as a compact index, not full stanzas. They carry no
 // verdict, and on a large backlog they outnumber real verdicts by orders of
@@ -98,8 +102,8 @@ func Render(items []Item, opts Options) string {
 	b.WriteString("# SAST triage report\n\n")
 	writeHeadline(&b, items)
 
-	section(&b, "Proposed suppressions (benign) — review first", benign, opts, benignNote)
 	section(&b, "Exploitable", exploitable, opts, exploitableNote)
+	section(&b, "Proposed suppressions (benign)", benign, opts, benignNote)
 	section(&b, "Uncertain", uncertain, opts, uncertainNote)
 	deferredSection(&b, filterDeferred(items), opts)
 
@@ -224,16 +228,13 @@ const DefaultDigestBytes = 50000
 const digestDeferredNote = "Not triaged: the run budget was exhausted before these were reached. They carry no verdict and stay unsuppressed; the next run picks them up. Raise -max-findings-budget, or narrow the scan."
 
 // RenderDigest renders a byte-bounded variant of the report for surfaces with
-// hard size caps — the Actions step summary and PR/issue bodies. Two things
-// differ from Render:
+// hard size caps — the Actions step summary and PR/issue bodies. It shares
+// Render's exploitable-first section order; one thing differs:
 //
-//   - Section order is inverted: exploitable first. A capped surface must lead
-//     with what cannot wait; the benign veto workflow lives in the review PR
-//     diff and the full report, neither of which is capped.
 //   - What does not fit is dropped by priority, never by byte offset, and the
-//     footer states exactly what was dropped. Truncating the report itself
-//     would cut from the tail — which is to say it would keep the proposed
-//     suppressions and discard the exploitable findings.
+//     footer states exactly what was dropped. Byte-truncating the rendering
+//     instead would cut from the tail — which is to say it would keep the
+//     proposed suppressions and discard the uncertain findings.
 //
 // maxBytes <= 0 uses DefaultDigestBytes. The headline and footer are always
 // emitted, so a pathologically small maxBytes yields those rather than nothing.
@@ -408,21 +409,27 @@ const highSeverity = 7.0
 // count line, preserving the caller's ordering in both.
 //
 // Under the cap nothing is filtered — a short table costs nothing and a
-// medium-severity row is worth seeing when there is room. Over it, SEVERITY
-// decides, not position: collapsing the tail of a class-ordered list would
-// hide a critical uncertain finding behind a dozen identical medium benign
-// ones. Filtering to critical/high instead means the collapse line can only
-// ever say "medium/low", which is what makes it safe to skim past.
+// medium-severity row is worth seeing when there is room. Over it, VERDICT and
+// SEVERITY decide, not position: collapsing the tail of a class-ordered list
+// would hide a critical uncertain finding behind a dozen identical medium
+// benign ones.
 //
-// A run whose findings are all medium or low would filter to an empty table,
-// which tells the reader nothing; there, the head of the list is better than
-// no rows at all.
+// Every exploitable row is kept whatever its severity. Class ordering puts them
+// first, and a filter that then drops a medium exploitable while keeping a high
+// benign contradicts that: the reader would see suppressions to approve above
+// the fold and a confirmed vulnerability in a "+N" line. Severity filters only
+// the rest, so the collapse line can still only ever say "medium/low", which is
+// what makes it safe to skim past.
+//
+// A run whose findings are all medium or low benign/uncertain would filter to
+// an empty table, which tells the reader nothing; there, the head of the list
+// is better than no rows at all.
 func splitRows(rows []Item) (shown, collapsed []Item) {
 	if len(rows) <= summaryMaxRows {
 		return rows, nil
 	}
 	for _, it := range rows {
-		if it.Severity >= highSeverity {
+		if it.Verdict == "exploitable" || it.Severity >= highSeverity {
 			shown = append(shown, it)
 		} else {
 			collapsed = append(collapsed, it)
