@@ -14,8 +14,6 @@ An LLM agent reads the code behind each finding; only `exploitable` verdicts —
   <img alt="The pull request sast-triage opens on its first run: a table of three findings — one exploitable, one benign, one uncertain — each with the reason the model gave, the rule, and a link to the flagged line" src="docs/images/pr-summary.png" width="900">
 </picture>
 
-_The pull request it opens on the first run — every verdict with the reasoning behind it, above a `.sast-triage/cache.json` diff you approve by merging. Disagree with one? Edit the entry, or delete it and the next run re-triages it._
-
 ## How it works
 
 ```mermaid
