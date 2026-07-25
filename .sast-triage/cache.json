@@ -1,6 +1,40 @@
 {
   "version": 1,
   "entries": {
+    "synthetic:0fbbae0429f6dd5bd67ce72d371093a45f540f2bccce1cbb1d0d44f471fa4ac9": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "exploitable",
+      "reason": "The Dependabot configuration is real and live: it defines two package-ecosystem entries (gomod at lines 4-10, github-actions at lines 14-20), and neither entry contains a `cooldown` block, nor is one set anywhere else in the file (lines 1-20 show the entire config). Consequently Dependabot will open update PRs for newly published dependency/action versions immediately upon release, which is exactly the supply-chain exposure the rule flags (CWE-829): a malicious just-published version could be proposed for merge with no waiting period for community vetting. The defect is genuinely present in the configuration.",
+      "evidence": [
+        ".github/dependabot.yml:1-2",
+        ".github/dependabot.yml:4-10",
+        ".github/dependabot.yml:14-20"
+      ],
+      "codeHash": "sha256:7e934fade38b0761fbd4cfd97fbf54099ec0ce50b62d82c2d0db415a6eb573f1",
+      "model": "kimi-k3",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-25T17:40:18Z",
+      "tokensUsed": 2813
+    },
+    "synthetic:4d37171025e51f08cf8758203b01fc40473041647fe3ed6e9e8767c9b90b40f1": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "benign",
+      "reason": "The only use of math/rand/v2 in the repository is rand.Int64N in OpenAIClient.backoff, which computes a jitter value added to HTTP retry backoff delays. The randomness has no security function: it produces no tokens, keys, session IDs, or secrets; it only spreads out retry timing among parallel workers hitting the same rate limit. An attacker who could predict the jitter learns nothing of value and gains no capability, so CWE-338 does not apply to this use. The finding is a false positive of the generic 'no math/rand' rule.",
+      "evidence": [
+        "internal/agent/openai.go:9",
+        "internal/agent/openai.go:239-249",
+        "internal/agent/openai.go:195-198"
+      ],
+      "codeHash": "sha256:8f4abeb3b270782477f6cea2e4fbc578a546090f7831474af1ffbcef812ff3c8",
+      "model": "kimi-k3",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-25T17:40:31Z",
+      "tokensUsed": 16797
+    },
     "synthetic:4fe6c0467edb31027eebf2f8a41aa92bc3f7efe7b3914df94d5d4739b24b4b8b": {
       "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
       "file": "internal/agent/openai.go",
@@ -11,6 +45,23 @@
       "model": "deepseek-v4-flash",
       "decidedAt": "2026-07-23T23:06:27Z",
       "tokensUsed": 55936
+    },
+    "synthetic:a46b9fb36f28a5d90c3d72434c68c61d0d6f5bad48fc80961b2cee05656d809d": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "exploitable",
+      "reason": "The finding is a true positive: the Dependabot configuration contains two update entries (gomod at lines 4-10, github-actions at lines 14-20) and neither sets a `cooldown` block, nor is there any cooldown anywhere in the file. Both entries use broad `groups` patterns of `*` (lines 8-10 and 18-20), so every dependency update — including a newly published, potentially malicious package version — would be proposed immediately on the weekly schedule with no 7-day stabilization window. The flagged defect (missing cooldown, CWE-829 supply-chain hardening gap) is therefore real as reported.",
+      "evidence": [
+        ".github/dependabot.yml:4-10",
+        ".github/dependabot.yml:14-20",
+        ".github/dependabot.yml:1-2"
+      ],
+      "codeHash": "sha256:6d3d8edd68c8035e71c3e20e51f31fab807a5418a3c812e28f7593584434b4f3",
+      "model": "kimi-k3",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-25T17:40:24Z",
+      "tokensUsed": 3046
     }
   }
 }
