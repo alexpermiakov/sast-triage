@@ -50,8 +50,8 @@ func TestRenderSectionOrder(t *testing.T) {
 	if benignAt < 0 || exploitAt < 0 || uncertainAt < 0 {
 		t.Fatalf("missing sections:\n%s", out)
 	}
-	if !(benignAt < exploitAt && exploitAt < uncertainAt) {
-		t.Error("sections must be ordered benign, exploitable, uncertain (scrutiny order)")
+	if !(exploitAt < benignAt && benignAt < uncertainAt) {
+		t.Error("sections must be ordered exploitable, benign, uncertain — every surface leads with what cannot wait")
 	}
 	if !strings.Contains(out, "5 findings — **1 exploitable** · **2 benign**") {
 		t.Errorf("summary line wrong:\n%s", strings.SplitN(out, "\n", 4)[2])
@@ -250,6 +250,33 @@ func TestRenderSummaryBoundsRows(t *testing.T) {
 	}
 	if len(out) > 4000 {
 		t.Errorf("summary grew to %d bytes on a 205-finding run; it must stay a summary", len(out))
+	}
+}
+
+// Severity filters the table over the cap, but never past an exploitable
+// verdict: a medium confirmed vulnerability hidden behind a "+N" line while
+// high-severity suppressions fill the rows is exactly backwards.
+func TestRenderSummaryKeepsExploitableUnderAnySeverity(t *testing.T) {
+	items := []Item{{
+		Fingerprint: "fp-medium-exploit", RuleID: "go.lang.security.audit.open-redirect",
+		File: "app/redirect.go", StartLine: 4, EndLine: 4, Severity: 5.0, Level: "warning",
+		Verdict: "exploitable", Reason: "attacker-controlled Location header",
+	}}
+	for i := range 30 {
+		items = append(items, Item{
+			Fingerprint: "fp-bulk", RuleID: "go.lang.security.audit.bulk",
+			File: "app/bulk.go", StartLine: i, EndLine: i, Severity: 8.0, Level: "error",
+			Verdict: "benign", Reason: "constant argument", Evidence: []string{"app/bulk.go:1"},
+		})
+	}
+
+	out := RenderSummary(items, Options{})
+
+	if !strings.Contains(out, "app/redirect.go:4") {
+		t.Errorf("a medium exploitable must survive the severity filter:\n%s", out)
+	}
+	if i := strings.Index(out, "app/redirect.go:4"); i > strings.Index(out, "app/bulk.go") {
+		t.Errorf("exploitable rows must lead the table:\n%s", out)
 	}
 }
 
