@@ -184,24 +184,34 @@ func TestRenderSummary(t *testing.T) {
 		Model:    "deepseek-v4-flash",
 		Scanner:  "opengrep",
 		RunURL:   "https://github.com/o/r/actions/runs/1",
-		RunLabel: "seed",
+		RunLabel: "first run (seed)",
 		LinkBase: "https://github.com/o/r/blob/abc",
 	})
 
 	for _, want := range []string{
-		"### sast-triage · seed",
+		"### sast-triage · first run (seed)",
 		"5 findings — **1 exploitable**",
+		// The decider qualifies every row under it, so it leads rather than
+		// sitting in the footer.
+		"Triaged by **deepseek-v4-flash**",
+		// The veto: what merging means, that the file is editable, and both
+		// ways out of a verdict the reviewer disagrees with. Suppression is
+		// only defensible while a human can overrule it in the diff in front
+		// of them, so this text is load-bearing, not decoration.
+		"**Merging approves every verdict above.**",
+		"`.sast-triage/cache.json`, which is part of this PR's diff — edit it like any other file",
+		"Change its `\"verdict\"` to `\"exploitable\"`",
+		"Delete the whole entry. The next run triages it from scratch.",
 		// Both judgement columns say whose judgement they are.
-		"| verdict<br><sub>sast-triage</sub> | severity<br><sub>opengrep</sub> | why | rule | location |",
-		"| ❌ exploitable | high |",
-		"| ✅ benign | high |",
-		"| ⚠️ uncertain | medium |",
+		"| Verdict<br><sub>by&nbsp;sast-triage</sub> | Severity<br><sub>by&nbsp;opengrep</sub> | Why | Rule | Location |",
+		"| ❌&nbsp;exploitable | high |",
+		"| ✅&nbsp;benign | high |",
+		"| ⚠️&nbsp;uncertain | medium |",
 		// The rule ID stays byte-exact — an operator copies it into a grep.
 		"`string-formatted-query`",
 		// The path carries a break opportunity per separator, and links to the
 		// unpadded path.
 		"[app/" + zeroWidthSpace + "handlers.go:17](https://github.com/o/r/blob/abc/app/handlers.go#L17)",
-		"verdict: sast-triage (deepseek-v4-flash) · severity: opengrep",
 		"[run summary](https://github.com/o/r/actions/runs/1)",
 	} {
 		if !strings.Contains(out, want) {
@@ -210,10 +220,10 @@ func TestRenderSummary(t *testing.T) {
 	}
 	// Class beats severity: the 8.6 uncertain-free ordering puts every benign
 	// row above the uncertain one even though one uncertain outranks nothing.
-	if strings.Index(out, "❌ exploitable") > strings.Index(out, "✅ benign") {
+	if strings.Index(out, "❌&nbsp;exploitable") > strings.Index(out, "✅&nbsp;benign") {
 		t.Error("exploitable rows must lead the table")
 	}
-	if strings.Index(out, "✅ benign") > strings.Index(out, "⚠️ uncertain") {
+	if strings.Index(out, "✅&nbsp;benign") > strings.Index(out, "⚠️&nbsp;uncertain") {
 		t.Error("benign rows must precede uncertain ones")
 	}
 	// Deferred findings carry no verdict, so they get no row — only the
@@ -255,7 +265,7 @@ func TestRenderSummaryBoundsRows(t *testing.T) {
 		t.Errorf("medium rows must collapse once over the cap:\n%s", out)
 	}
 	// The exploitable finding sorts first, so no cap can drop it.
-	if !strings.Contains(out, "❌ exploitable") {
+	if !strings.Contains(out, "❌&nbsp;exploitable") {
 		t.Errorf("exploitable row was collapsed away:\n%s", out)
 	}
 	if len(out) > 4000 {
@@ -413,8 +423,13 @@ func TestSuppressionComment(t *testing.T) {
 		t.Errorf("comment omits the fresh suppression:\n%s", got)
 	}
 	for _, want := range []string{
-		"merging approves them",                      // what the reviewer is actually doing
-		".sast-triage/cache.json",                    // where to look
+		"merging approves them",   // what the reviewer is actually doing
+		".sast-triage/cache.json", // where to look
+		// Both ways to overrule a verdict, in the same words the seed PR body
+		// uses: a reviewer who learns the move on one surface must not have to
+		// relearn it on the other.
+		`change ` + "`\"verdict\"`" + ` to ` + "`\"exploitable\"`",
+		"delete the entry",
 		"https://github.com/o/r/pull/7/files#diff-x", // one click to the diff
 		SuppressionMarker("abc123"),                  // dedupe on re-run
 	} {

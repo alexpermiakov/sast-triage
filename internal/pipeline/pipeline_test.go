@@ -563,9 +563,12 @@ func TestRunWritesSummary(t *testing.T) {
 	for _, want := range []string{
 		"### sast-triage · seed",
 		"**1 exploitable**",
-		"❌ exploitable",
+		"❌&nbsp;exploitable",
 		cfg.Model,
 		cfg.RunURL,
+		// The scanner behind the severity column, read out of the fixture's
+		// tool.driver.name rather than left as "your scanner".
+		"by&nbsp;Semgrep&nbsp;OSS",
 	} {
 		if !strings.Contains(string(summary), want) {
 			t.Errorf("summary missing %q:\n%s", want, summary)

@@ -53,10 +53,10 @@ type Item struct {
 type Options struct {
 	LinkBase string
 
-	// Model and RunURL are attribution, used by the summary's footer. A
-	// reader deciding whether to trust a wall of verdicts needs to know which
-	// model produced them and where the full evidence lives; neither is
-	// derivable from the items.
+	// Model and RunURL are attribution, used by the summary. A reader deciding
+	// whether to trust a wall of verdicts needs to know which model produced
+	// them and where the full evidence lives; neither is derivable from the
+	// items.
 	Model  string
 	RunURL string
 
@@ -154,6 +154,23 @@ func writeHeadline(b *strings.Builder, items []Item) {
 	}
 	fmt.Fprintf(b, "\n%d from cache · %d newly triaged · %s in / %s out tokens\n",
 		cached, fresh, humanCount(tokensIn), humanCount(tokensOut))
+}
+
+// writeDecider names the model that produced the verdicts, on the third line
+// of the summary's header.
+//
+// It sits at the top rather than in the footer because it qualifies everything
+// below it. A reader scanning a table of suppressions is being asked to trust a
+// specific model, and "which one" is not a detail to discover under the fold
+// after already reading the verdicts.
+//
+// Silent when no model is known — a cache-only run decided nothing new, and
+// naming a decider that did not run would be a lie about who judged what.
+func writeDecider(b *strings.Builder, opts Options) {
+	if opts.Model == "" {
+		return
+	}
+	fmt.Fprintf(b, "Triaged by **%s**\n", opts.Model)
 }
 
 // humanCount abbreviates token counts. "162k" is the number a reader acts on;
@@ -377,10 +394,11 @@ func RenderSummary(items []Item, opts Options) string {
 	}
 	b.WriteString("\n\n")
 	writeHeadline(&b, items)
+	writeDecider(&b, opts)
 
 	if len(rows) > 0 {
 		shown, collapsed := splitRows(rows)
-		fmt.Fprintf(&b, "\n| %s | %s | why | rule | location |\n", sourced("verdict", "sast-triage"), sourced("severity", opts.Scanner))
+		fmt.Fprintf(&b, "\n| %s | %s | Why | Rule | Location |\n", sourced("Verdict", "sast-triage"), sourced("Severity", opts.Scanner))
 		b.WriteString("| --- | --- | --- | --- | --- |\n")
 		for _, it := range shown {
 			fmt.Fprintf(&b, "| %s | %s | %s | `%s` | %s |\n",
@@ -392,31 +410,46 @@ func RenderSummary(items []Item, opts Options) string {
 		}
 	}
 
-	fmt.Fprintf(&b, "\nMerging approves the suppressions. Drop any entry from `%s` — it is re-triaged next run.\n", cacheFileName)
+	writeVetoInstructions(&b)
 	writeSummaryFooter(&b, opts)
 	return b.String()
 }
 
+// writeVetoInstructions tells the reviewer they can overrule the model, and
+// exactly how.
+//
+// This is the most important paragraph in the body. Every verdict above it is a
+// machine's opinion that becomes repository policy the moment this PR merges,
+// and the thing that makes that safe is a human able to say no — cheaply, in
+// the diff already in front of them, without learning a CLI. "Drop any entry"
+// undersold it: it named one of the two moves, called it dropping rather than
+// disagreeing, and never said the file is editable at all.
+//
+// Both moves are spelled out with their consequence, because they answer
+// different objections. Changing the verdict is for a reviewer who knows the
+// finding is real: it is a decision, and it holds — Lookup keeps a hand-written
+// exploitable, and the gate counts it. Deleting is for one who only knows the
+// reasoning is wrong: it costs a re-triage and defers to the next run.
+func writeVetoInstructions(b *strings.Builder) {
+	fmt.Fprintf(b, "\n**Merging approves every verdict above.** They live in `%s`, which is part of this PR's diff — edit it like any other file:\n\n", cacheFileName)
+	b.WriteString("- **Disagree with a verdict?** Change its `\"verdict\"` to `\"exploitable\"`. The finding stays unsuppressed, and an enforcing run fails on it.\n")
+	b.WriteString("- **Want it looked at again?** Delete the whole entry. The next run triages it from scratch.\n")
+}
+
 // cacheFileName is the default cache path, named in the summary so the
-// instruction to drop an entry points at a real file. An operator who moved it
+// instruction to edit an entry points at a real file. An operator who moved it
 // with -cache reads one wrong path in a PR body; threading the real value
 // through three layers to fix that is not worth it.
 const cacheFileName = ".sast-triage/cache.json"
 
-// writeSummaryFooter attributes each column to whoever produced it, in column
-// order. The verdict is one specific model's — a reader weighing a wall of
-// suppressions is entitled to know which, without digging into the workflow
-// file — and severity is the scanner's number, not a judgement this tool made.
+// writeSummaryFooter points at the run and the full report.
+//
+// Attribution used to live here and no longer does: the columns name their own
+// sources and writeDecider names the model, so repeating either in the footer
+// says the same thing a third time. What is left is the two links, which are
+// the only things in the body a reader has to leave the page for.
 func writeSummaryFooter(b *strings.Builder, opts Options) {
-	verdict := "verdict: sast-triage"
-	if opts.Model != "" {
-		verdict += " (" + opts.Model + ")"
-	}
-	severity := "severity: your scanner"
-	if opts.Scanner != "" {
-		severity = "severity: " + opts.Scanner
-	}
-	parts := []string{verdict, severity}
+	var parts []string
 	if opts.RunURL != "" {
 		parts = append(parts, fmt.Sprintf("[run summary](%s)", opts.RunURL))
 		parts = append(parts, fmt.Sprintf("[`triage-report.md`](%s#artifacts)", opts.RunURL))
@@ -510,26 +543,54 @@ func bucketList(items []Item) string {
 // verdictCell prefixes the verdict with a glyph. The glyph is redundant with
 // the word beside it on purpose: it survives being skimmed, and it is what
 // makes a wall of green rows with one red one readable at a glance.
+//
+// The space between them is non-breaking, which is the one place in the table
+// that buys width rather than saving it. A glyph wrapped onto its own line is
+// not a skimmable marker any more — it is a stray icon above a word — and the
+// column is the narrowest in the table, so the few pixels it costs the reason
+// column are worth the one thing this column exists to do.
 func verdictCell(verdict string) string {
 	switch verdict {
 	case "exploitable":
-		return "❌ exploitable"
+		return "❌&nbsp;exploitable"
 	case "benign":
-		return "✅ benign"
+		return "✅&nbsp;benign"
 	default:
-		return "⚠️ uncertain"
+		return "⚠️&nbsp;uncertain"
 	}
 }
 
-// sourced labels a column with the name of whoever produced it, on a second
-// line so the attribution costs the column no width: the sub-label is shorter
-// than the header above it, and both wrap.
+// sourced labels a column with whoever produced it, on a second line so the
+// attribution costs the column no width: the sub-label is shorter than the
+// header above it, and both wrap.
+//
+// "by X", not a bare name: a scanner's own driver name is a product name
+// ("Semgrep OSS"), and under a column header a bare product name reads as a
+// value in that column rather than as the thing that produced it. The name is
+// printed as the tool gives it — trimming it to what looks tidier would be
+// this tool renaming somebody else's.
+//
+// A short attribution is held on one line, because these are the two narrowest
+// columns in the table and "by / Semgrep / OSS" stacked under "Severity" is
+// three lines of header for two words. A long product name is left breakable
+// instead: a column forced to the width of "Fortify Static Code Analyzer" is
+// the horizontal scrollbar all over again, and a wrapped label is the cheaper
+// of the two failures.
 func sourced(header, source string) string {
 	if source == "" {
 		return header
 	}
-	return header + "<br><sub>" + source + "</sub>"
+	label := "by " + source
+	if len([]rune(label)) <= maxSourceRunes {
+		label = strings.ReplaceAll(label, " ", "&nbsp;")
+	}
+	return header + "<br><sub>" + label + "</sub>"
 }
+
+// maxSourceRunes is how wide a column header's attribution may force its column
+// to be. Fourteen runes fits "by sast-triage" and "by Semgrep OSS", i.e. a
+// scanner named the way scanners are usually named.
+const maxSourceRunes = 14
 
 // zeroWidthSpace is a break opportunity that renders as nothing.
 //
@@ -703,7 +764,7 @@ func SuppressionComment(items []Item, opts Options, commitSHA, cacheDiffURL stri
 		if rest := len(fresh) - shown; rest > 0 {
 			fmt.Fprintf(&b, "\n_+%d more — the full list is in the cache diff and in `triage-report.md`._\n", rest)
 		}
-		b.WriteString("\nTo veto one: delete its entry from the cache file in this PR, or reject the PR. A deleted entry is re-triaged on the next run.\n")
+		b.WriteString("\nTo veto one, edit its entry in the cache file in this PR: change `\"verdict\"` to `\"exploitable\"` to overrule the model and keep the finding, or delete the entry to have it re-triaged from scratch on the next run. Rejecting the PR vetoes all of them.\n")
 	}
 	if len(overridden) > 0 {
 		fmt.Fprintf(&b, "\n### %s not auto-suppressed\n\n", plural(len(overridden), "finding"))

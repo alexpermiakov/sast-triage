@@ -225,11 +225,13 @@ func main() {
 
 // runLabel names the run for the summary heading. Baseline runs are called
 // "seeding" everywhere else — in the docs, the workflow, and the PR title the
-// summary becomes the body of — so the heading says "seed" rather than making
-// the reader translate the flag value.
+// summary becomes the body of — so the label carries "seed" rather than making
+// the reader translate the flag value. It leads with what "seed" means, because
+// the reader most likely to be reading this heading is the one seeing the tool
+// for the first time, in the pull request it opened by itself.
 func runLabel(mode string) string {
 	if mode == pipeline.ModeBaseline {
-		return "seed"
+		return "first run (seed)"
 	}
 	return mode
 }
