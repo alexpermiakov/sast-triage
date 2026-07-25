@@ -182,6 +182,9 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 		return Summary{}, err
 	}
 	scanned := len(findings)
+	// Captured before scoping: the scanner that produced the log is the same
+	// one whether or not the diff filter left any of its findings standing.
+	scanner := sarif.ToolName(findings)
 
 	// Scope, before the cache is even consulted: triaging a finding outside
 	// the change is wasted money on a PR run, and the gate must not fire on
@@ -298,7 +301,7 @@ func Run(ctx context.Context, cfg Config) (Summary, error) {
 	if err := c.Save(cfg.CachePath); err != nil {
 		return summary, err
 	}
-	opts := report.Options{LinkBase: cfg.LinkBase}
+	opts := report.Options{LinkBase: cfg.LinkBase, Scanner: scanner}
 	md := report.Render(items, opts)
 	if err := os.WriteFile(cfg.ReportPath, []byte(md), 0o644); err != nil {
 		return summary, fmt.Errorf("write report: %w", err)

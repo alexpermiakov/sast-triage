@@ -60,6 +60,13 @@ type Options struct {
 	Model  string
 	RunURL string
 
+	// Scanner names the tool whose SARIF this run triaged, e.g. "opengrep".
+	// It is attribution for the severity column, which is the scanner's number
+	// and not a judgement this tool made — a distinction a reader cannot draw
+	// from a table that labels the column "severity" and the one beside it
+	// "verdict". Empty when the log names no driver, and then simply omitted.
+	Scanner string
+
 	// RunLabel names what this run was, e.g. "seed". Empty omits it.
 	RunLabel string
 }
@@ -347,6 +354,19 @@ const summaryMaxRows = 15
 // order a reviewer consumes them. The verdict is the claim being made and the
 // reason is the argument for it, so both sit ahead of the rule ID and the
 // line, which only matter once the reader has decided to go look.
+//
+// The two columns that are somebody's judgement name whose: the verdict is
+// this tool's, the severity is the scanner's. Side by side and unlabelled they
+// read as one system's opinion, and the whole point of the severity column is
+// that it is not.
+//
+// Column widths are not set — GitHub strips the CSS and the attributes that
+// would set them — they are earned by making every cell wrappable, see
+// zeroWidthSpace. A table renders at max-content capped to its container, so
+// any cell that cannot wrap pushes the table past the container and the reader
+// scrolls sideways to read a summary. Once the location column can wrap it
+// collapses to its text, and the why column, having by far the most text,
+// takes the width it gave up.
 func RenderSummary(items []Item, opts Options) string {
 	rows := append(append(filter(items, "exploitable"), filter(items, "benign")...), filter(items, "uncertain")...)
 
@@ -360,12 +380,12 @@ func RenderSummary(items []Item, opts Options) string {
 
 	if len(rows) > 0 {
 		shown, collapsed := splitRows(rows)
-		b.WriteString("\n| verdict | severity | why | rule | location |\n")
+		fmt.Fprintf(&b, "\n| %s | %s | why | rule | location |\n", sourced("verdict", "sast-triage"), sourced("severity", opts.Scanner))
 		b.WriteString("| --- | --- | --- | --- | --- |\n")
 		for _, it := range shown {
 			fmt.Fprintf(&b, "| %s | %s | %s | `%s` | %s |\n",
 				verdictCell(it.Verdict), severityBucket(it.Severity),
-				cell(it.Reason), compactRule(it.RuleID), link(it.Location(), opts))
+				cell(it.Reason), shortRule(it.RuleID), locationCell(it.Location(), opts))
 		}
 		if len(collapsed) > 0 {
 			fmt.Fprintf(&b, "\n+%d %s — see the report.\n", len(collapsed), bucketList(collapsed))
@@ -392,7 +412,11 @@ func writeSummaryFooter(b *strings.Builder, opts Options) {
 	if opts.Model != "" {
 		verdict += " (" + opts.Model + ")"
 	}
-	parts := []string{verdict, "severity: your scanner"}
+	severity := "severity: your scanner"
+	if opts.Scanner != "" {
+		severity = "severity: " + opts.Scanner
+	}
+	parts := []string{verdict, severity}
 	if opts.RunURL != "" {
 		parts = append(parts, fmt.Sprintf("[run summary](%s)", opts.RunURL))
 		parts = append(parts, fmt.Sprintf("[`triage-report.md`](%s#artifacts)", opts.RunURL))
@@ -497,17 +521,59 @@ func verdictCell(verdict string) string {
 	}
 }
 
-// compactRule trims a rule ID to its last three dot-separated segments.
-// Scanner rule IDs are namespaced to the point of unreadability
-// ("go.lang.security.audit.sqli.string-formatted-query"), and the leading
-// segments are the ones every row in the table shares. The tail is what
-// distinguishes rules and what an operator greps for.
-func compactRule(ruleID string) string {
-	parts := strings.Split(ruleID, ".")
-	if len(parts) <= 3 {
-		return ruleID
+// sourced labels a column with the name of whoever produced it, on a second
+// line so the attribution costs the column no width: the sub-label is shorter
+// than the header above it, and both wrap.
+func sourced(header, source string) string {
+	if source == "" {
+		return header
 	}
-	return strings.Join(parts[len(parts)-3:], ".")
+	return header + "<br><sub>" + source + "</sub>"
+}
+
+// zeroWidthSpace is a break opportunity that renders as nothing.
+//
+// GitHub sizes a markdown table at its max-content width capped to the
+// container, so a cell that cannot wrap below its own longest token sets the
+// table's minimum width — and a deep source path is one such token, long
+// enough on its own to push a five-column summary past the container and put a
+// horizontal scrollbar under it. Browsers offer a line break after a hyphen
+// unprompted but never after "/", so a path is unbreakable in a way a rule ID
+// mostly is not.
+//
+// <wbr>, which exists for exactly this and leaves no character behind, is
+// stripped by GitHub's HTML sanitizer (verified against its /markdown API), so
+// the zero-width space is what is left. It is a real character, which is the
+// cost: copying a wrapped path yields invisible bytes in the paste. Only the
+// location column pays it — paths in the table are there to be clicked, and
+// the rule ID beside them stays byte-exact for the operator who copies it into
+// a grep.
+const zeroWidthSpace = "​"
+
+// softWrap inserts a zero-width space after every rune in at, except a
+// trailing one, where a break would gain nothing.
+func softWrap(s, at string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i, r := range s {
+		b.WriteRune(r)
+		if strings.ContainsRune(at, r) && i+len(string(r)) < len(s) {
+			b.WriteString(zeroWidthSpace)
+		}
+	}
+	return b.String()
+}
+
+// locationCell is link for the summary table: the same target and the same
+// text, with a break opportunity at each path separator so a deep path wraps
+// inside its column instead of widening the table. The URL is left alone —
+// only the label a human reads is padded.
+func locationCell(ref string, opts Options) string {
+	label := softWrap(ref, "/")
+	if u := blobURL(ref, opts); u != "" {
+		return fmt.Sprintf("[%s](%s)", label, u)
+	}
+	return "`" + label + "`"
 }
 
 // maxCellRunes bounds the why column. Reasons are model prose with no length
@@ -632,7 +698,7 @@ func SuppressionComment(items []Item, opts Options, commitSHA, cacheDiffURL stri
 		shown := min(len(fresh), suppressionMaxRows)
 		for _, it := range fresh[:shown] {
 			fmt.Fprintf(&b, "| `%s` | %s | %s |\n",
-				shortRule(it.RuleID), link(it.Location(), opts), cell(it.Reason))
+				shortRule(it.RuleID), locationCell(it.Location(), opts), cell(it.Reason))
 		}
 		if rest := len(fresh) - shown; rest > 0 {
 			fmt.Fprintf(&b, "\n_+%d more — the full list is in the cache diff and in `triage-report.md`._\n", rest)
@@ -726,21 +792,38 @@ func filterBy(items []Item, keep func(Item) bool) []Item {
 // link turns "path:12" / "path:12-20" into a markdown link when a LinkBase is
 // configured, otherwise leaves it as inline code.
 func link(ref string, opts Options) string {
+	if u := blobURL(ref, opts); u != "" {
+		return fmt.Sprintf("[%s](%s)", ref, u)
+	}
+	return "`" + ref + "`"
+}
+
+// blobURL is the blob link for a "path:12" / "path:12-20" reference, or "" when
+// there is no LinkBase to hang it off or no line to anchor to.
+func blobURL(ref string, opts Options) string {
 	if opts.LinkBase == "" {
-		return "`" + ref + "`"
+		return ""
 	}
 	i := strings.LastIndex(ref, ":")
 	if i <= 0 {
-		return "`" + ref + "`"
+		return ""
 	}
 	file, lines := ref[:i], ref[i+1:]
 	anchor := "#L" + lines
 	if j := strings.Index(lines, "-"); j >= 0 {
 		anchor = "#L" + lines[:j] + "-L" + lines[j+1:]
 	}
-	return fmt.Sprintf("[%s](%s/%s%s)", ref, strings.TrimSuffix(opts.LinkBase, "/"), file, anchor)
+	return fmt.Sprintf("%s/%s%s", strings.TrimSuffix(opts.LinkBase, "/"), file, anchor)
 }
 
+// shortRule trims a rule ID to its last dot-separated segment. Scanner rule IDs
+// are namespaced to the point of unreadability
+// ("go.lang.security.audit.sqli.string-formatted-query"), and the leading
+// segments are the ones every row of a table shares — width spent on
+// "security.audit." in every row is width taken from the reason beside it. The
+// tail is what distinguishes rules and what an operator greps for, and it is
+// hyphenated, so unlike the namespace it also wraps. The full ID is in the
+// report, the issue and the cache entry.
 func shortRule(ruleID string) string {
 	parts := strings.Split(ruleID, ".")
 	return parts[len(parts)-1]

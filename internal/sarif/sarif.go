@@ -34,6 +34,13 @@ type Finding struct {
 	Snippet     string
 	Fingerprint string // matchBasedId/v1, or synthesized fallback
 	Trace       []TraceHop
+
+	// Scanner is the tool that produced the run this finding came from
+	// (tool.driver.name), carried per finding because one log may hold several
+	// runs from several tools. Reporting attributes severity to it; nothing
+	// keyed on identity may use it, since a scanner rename would silently
+	// re-triage a whole repo.
+	Scanner string
 }
 
 // TraceHop is one step of a SARIF codeFlows taint trace.
@@ -51,6 +58,22 @@ func (f Finding) Location() string {
 		return fmt.Sprintf("%s:%d-%d", f.File, f.StartLine, f.EndLine)
 	}
 	return fmt.Sprintf("%s:%d", f.File, f.StartLine)
+}
+
+// ToolName names the scanner behind a set of findings, for attribution in
+// reports. A log holding runs from several tools names all of them rather than
+// picking one, and an unnamed driver yields "" so callers can omit the
+// attribution instead of printing a blank one.
+func ToolName(findings []Finding) string {
+	var names []string
+	seen := map[string]bool{}
+	for _, f := range findings {
+		if f.Scanner != "" && !seen[f.Scanner] {
+			seen[f.Scanner] = true
+			names = append(names, f.Scanner)
+		}
+	}
+	return strings.Join(names, " + ")
 }
 
 // ParseFile reads and parses a SARIF log, returning findings sorted by
@@ -140,6 +163,7 @@ func findingsFromRun(r run) ([]Finding, error) {
 			}
 			continue // leaves the zero Finding at i; the caller decides
 		}
+		f.Scanner = r.Tool.Driver.Name
 		findings[i] = f
 		if id := scannerID(res); id != "" {
 			scannerIDs[id]++

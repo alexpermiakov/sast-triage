@@ -914,7 +914,9 @@ func TestRunPostsSuppressionSummary(t *testing.T) {
 	if len(conv.posted) != 1 {
 		t.Fatalf("posted %d comments, want 1", len(conv.posted))
 	}
-	body := conv.posted[0]
+	// <wbr> stripped: the comment's paths carry break hints so the table fits a
+	// PR conversation without scrolling sideways.
+	body := strings.ReplaceAll(conv.posted[0], "\u200b", "")
 	if !strings.Contains(body, "suppressed by this change") || !strings.Contains(body, "app/config.go") {
 		t.Errorf("comment does not name what it suppressed:\n%s", body)
 	}
