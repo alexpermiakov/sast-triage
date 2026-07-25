@@ -361,26 +361,29 @@ dependencies, table-tested without an LLM anywhere near it.
 The binary's contract: reads SARIF + cache; writes report + updated cache;
 returns exit code. No hidden state.
 
-- `triage-report.md`: complete and uncapped, sorted by required human scrutiny —
-  proposed suppressions (benign) FIRST with clickable file:line evidence (veto
-  must be a 30-second action), then exploitable, then uncertain. Findings the
+- `triage-report.md`: complete and uncapped. EXPLOITABLE first, then the
+  proposed suppressions (benign) with clickable file:line evidence, then
+  uncertain. Every surface this tool writes leads with what cannot wait: the
+  reader's first question is whether anything is on fire, not what is being
+  suppressed, and answering the second first makes them scroll a wall of
+  suppressions to find out. The benign veto stays a 30-second action regardless —
+  it is performed on the `cache.json` diff in a pull request, and this section
+  is the detail behind that diff, not the entry point to it. Findings the
   run never reached (deferred) render as a compact index — location, rule,
   severity — not full stanzas: they carry no verdict, and on a large backlog
   they outnumber real verdicts 100:1, burying the analysis in boilerplate.
 - `triage-digest.md` (`-digest`, on by default): a byte-bounded rendering of the
   same items for surfaces that cap size — the Actions step summary (1 MiB) and
-  PR/issue bodies (65,536 chars). Two deliberate differences from the report:
-  section order is INVERTED (exploitable first), because a capped surface must
-  lead with what cannot wait while the benign veto workflow lives in the
-  uncapped PR diff and report; and overflow is dropped by priority with the
+  PR/issue bodies (65,536 chars). Same section order as the report; one
+  deliberate difference: overflow is dropped by priority with the
   footer stating what was dropped. Byte-truncating the report instead would cut
-  from the tail — keeping the proposed suppressions and discarding the
-  exploitable findings. The cap is a guarantee, not an estimate: the trailer and
+  from the tail — keeping the exploitable findings but discarding whichever
+  class fell last. The cap is a guarantee, not an estimate: the trailer and
   worst-case footer are reserved before any finding is written. Rendering this
   belongs in the binary; making each consumer parse the report's markdown to fit
   their surface is the failure this replaces.
 - `triage-summary.md` (`-summary`, on by default): the headline plus ONE table —
-  severity, verdict, rule, location, why — capped at 15 rows, no evidence lists
+  verdict, severity, why, rule, location — capped at 15 rows, no evidence lists
   and no stanzas. It is the seed PR body, used verbatim. That body sits directly
   above a `cache.json` diff carrying every verdict with its reason and cited
   evidence, in the one place a reviewer can actually edit a verdict; a digest
@@ -391,13 +394,18 @@ returns exit code. No hidden state.
     severity descending within each. The classes ask different things of the
     reader — work, a suppression to approve, an FYI — and interleaving them by
     severity alone means sorting them apart by hand.
-  - **Over the cap, SEVERITY filters; it never truncates the tail.** Cutting a
-    class-ordered list at row 15 would hide a critical `uncertain` behind a
-    dozen identical medium `benign` rows. Filtering to critical/high instead
-    means the collapse line can only ever say "+N medium/low", which is what
+  - **Over the cap, VERDICT and SEVERITY filter; it never truncates the tail.**
+    Cutting a class-ordered list at row 15 would hide a critical `uncertain`
+    behind a dozen identical medium `benign` rows. Every `exploitable` row is
+    kept whatever its severity — a filter that dropped a medium exploitable
+    while keeping a high benign would contradict the class ordering it sits
+    under, putting suppressions to approve above the fold and a confirmed
+    vulnerability in the "+N" line. Severity filters the rest to critical/high,
+    so the collapse line can still only ever say "+N medium/low", which is what
     makes it safe to skim past. Under the cap nothing is filtered, so no
-    collapse line exists there at all. The one fallback: an all-medium run
-    would filter to an empty table, so it shows the head of the list instead.
+    collapse line exists there at all. The one fallback: a run of only medium
+    benign/uncertain findings would filter to an empty table, so it shows the
+    head of the list instead.
   - **Deferred findings get no row.** They carry no verdict; a row invites a
     reviewer to act on a finding the run never looked at. The headline counts
     them.

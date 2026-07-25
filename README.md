@@ -244,7 +244,7 @@ sast-triage -provider anthropic -model claude-sonnet-5 \
 - ✅ **Classes you can forbid it from auto-dismissing** — `no-suppress-cwe: "CWE-501,CWE-327"` and a `benign` on those becomes `uncertain` and stays visible. Empty by default: the tool ships no opinion about what your repo can afford to auto-suppress. Keyed on CWE so it survives a scanner swap, and a typo fails the run rather than silently matching nothing. Measured starting point below if you want one
 - ✅ **Filtered SARIF on every run** (`triaged.sarif`, on by default) — benign findings are relabelled via `suppressions[]`, never deleted. Upload it to the Security tab with `github/codeql-action/upload-sarif`, or hand it to DefectDojo
 - ✅ **Inline PR comments** (`pr-comments: true`) — the verdict, the reasoning, and the cited evidence land on the diff line, where the review already is
-- ✅ **`triage-report.md`** — every verdict with its reasoning and clickable `file:line` evidence, proposed suppressions first so vetoing one is a 30-second action. Complete and uncapped; keep it with `actions/upload-artifact`
+- ✅ **`triage-report.md`** — every verdict with its reasoning and clickable `file:line` evidence, exploitable findings first so the answer to "is anything on fire?" is the top of the page, then the proposed suppressions. Complete and uncapped; keep it with `actions/upload-artifact`
 - ✅ **Human-approved verdicts** — the run updates `.sast-triage/cache.json`; it reaches `main` through a normal PR merge, so every suppression is a readable diff nobody can skip
 - ✅ **GitHub issues for confirmed vulnerabilities** (opt-in `create-issues:`) — one per finding, deduped across runs, with the evidence in the body
 - ✅ **Any SARIF 2.1.0 scanner** — Semgrep, CodeQL, Snyk Code, gosec, Bandit, …
