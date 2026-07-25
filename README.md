@@ -239,7 +239,7 @@ sast-triage -provider anthropic -model claude-sonnet-5 \
 
 ## What you get
 
-- ✅ **A gate that only fires on `exploitable`** (`mode: enforce`, exit 3) — never on `uncertain`, never on the backlog. A gate that fires on noise is a gate that gets disabled in a week, so this one doesn't. Want the strict version? `fail-on: exploitable,uncertain` opts in, and findings your run budget never reached still don't gate
+- ✅ **A gate that only fires on `exploitable`** (`mode: enforce`) — never on `uncertain`, never on the backlog. A gate that fires on noise is a gate that gets disabled in a week, so this one doesn't. Want the strict version? `fail-on: exploitable,uncertain` opts in, and findings your run budget never reached still don't gate
 - ✅ **Every suppression announced in the PR** (`pr-comments: true`) — one comment saying "3 findings suppressed by this change", each with the reason, linked to the cache diff where you can veto it. The tool doesn't hide what it dismissed; it writes it into your diff
 - ✅ **Classes you can forbid it from auto-dismissing** — `no-suppress-cwe: "CWE-501,CWE-327"` and a `benign` on those becomes `uncertain` and stays visible. Empty by default: the tool ships no opinion about what your repo can afford to auto-suppress. Keyed on CWE so it survives a scanner swap, and a typo fails the run rather than silently matching nothing. Measured starting point below if you want one
 - ✅ **Filtered SARIF on every run** (`triaged.sarif`, on by default) — benign findings are relabelled via `suppressions[]`, never deleted. Upload it to the Security tab with `github/codeql-action/upload-sarif`, or hand it to DefectDojo
@@ -266,7 +266,7 @@ Everything below has a working default — the quick starts above set `model`, `
 
 Only the first run costs anything. Every finding after that is a cache hit until the code it cites changes, so re-running the same 2,376 findings is ~$0 and a PR that adds one new finding costs one finding.
 
-That is the whole backlog, once — against $15k–18k a year for a 50-developer seat licence.
+Against a commercial SAST-triage tier, which runs four to five figures a year for a team
 
 </details>
 
@@ -411,7 +411,7 @@ Whatever your scanner scans. The agent doesn't parse code — it reads it the wa
 
 A PR fails when `mode: enforce` and the run finds an **exploitable** verdict in scope (exit 3). Never on `uncertain`, never on `benign`, and never on findings outside the change — `scope: diff` means the gate only ever considers files the PR touched. That is what makes it a gate people leave on.
 
-If you want unresolved findings to block too, `fail-on: exploitable,uncertain` says so explicitly. Findings the run budget never reached are still excluded even then: the budget running out is the tool failing to look, not a claim about your code, and a gate whose exit code depends on queue length is not one you can reason about. Note that this is deliberately *not* implied by the no-suppress CWE list — that list moves every `benign` in those classes to `uncertain`, the correct ones included, so gating on it would fail your build on every trust-boundary finding in the repo.
+If you want unresolved findings to block too, `fail-on: exploitable,uncertain` says so explicitly. Findings the run budget never reached are still excluded even then: the budget running out is the tool failing to look, not a claim about your code, and a gate whose exit code depends on queue length is not one you can reason about. Note that this is deliberately _not_ implied by the no-suppress CWE list — that list moves every `benign` in those classes to `uncertain`, the correct ones included, so gating on it would fail your build on every trust-boundary finding in the repo.
 
 Note what the gate does _not_ depend on: whether a verdict was decided this run or came from the cache. Making the exit code a function of cache state means the same code passes or fails depending on who merged a cache update first, and a wiped cache turns your whole backlog into "new". Scope is what keeps the backlog out, not cache freshness.
 
