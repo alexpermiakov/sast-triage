@@ -79,3 +79,13 @@ jobs:
           fi
           gh release create "$TAG" dist/* "${notes[@]}"
 
+      - name: Move the major alias
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          major="${TAG%%.*}" # v1.2.15 -> v1
+          git tag -f "$major" "$TAG"
+          git push -f origin "refs/tags/$major"
+          echo "::notice::$major now points at $TAG"
+

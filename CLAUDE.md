@@ -79,7 +79,11 @@ action.yml           composite GitHub Action wrapping the binary; downloads the
                      full-scope scheduled run the docs recommend is NOT dogfooded
                      here; release.yml (on v*.*.* tags: cross-compiles
                      linux/darwin × amd64/arm64, attests provenance, uploads the
-                     assets action.yml downloads)
+                     assets action.yml downloads, then force-moves the `vN` alias
+                     README tells consumers to pin — last, so the alias only ever
+                     names a release whose binaries exist. Publishing is
+                     idempotent: a release created by hand first is filled in with
+                     `upload --clobber`, so tagging from the Releases UI works)
 testdata/            real scanner SARIF fixtures, opengrep/semgrep format (pinned
                      to unit-test line numbers)
                      + sampleapp/, the intentionally vulnerable smoke-test target
