@@ -1,6 +1,39 @@
 {
   "version": 1,
   "entries": {
+    "synthetic:0fbbae0429f6dd5bd67ce72d371093a45f540f2bccce1cbb1d0d44f471fa4ac9": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "exploitable",
+      "reason": "The finding accurately describes a real configuration defect: the entire .github/dependabot.yml (only 20 lines) contains no `cooldown` block in either update entry. The flagged `github-actions` entry (lines 14-20) groups all action updates with patterns [\"*\"] on a weekly schedule, so Dependabot would propose a newly published version of a GitHub Action immediately upon release. Because workflows pin actions by SHA and Dependabot bumps them, a compromised or malicious action release could be proposed and merged before any community vetting window (default-days cooldown) elapses — the exact supply-chain exposure (CWE-829) the rule targets. There is no code or config that mitigates this; the defect is real as flagged.",
+      "evidence": [
+        ".github/dependabot.yml:1-20",
+        ".github/dependabot.yml:14-20"
+      ],
+      "codeHash": "sha256:5166a3ae8abbb467a36d8baaff95384c11ea7b06cc4d848a827ad14f9a27e29c",
+      "model": "kimi-k3",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-25T20:27:28Z",
+      "tokensUsed": 3014
+    },
+    "synthetic:4d37171025e51f08cf8758203b01fc40473041647fe3ed6e9e8767c9b90b40f1": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "benign",
+      "reason": "The sole use of the math/rand/v2 import is rand.Int64N in OpenAIClient.backoff (line 248), which computes a retry-delay jitter between half the exponential backoff and the full delay for HTTP retries of a chat-completions endpoint. The random value only affects sleep timing between retries (c.sleep(ctx, delay) at line 199) and is never used for tokens, keys, nonces, identifiers, or any security-relevant decision, so PRNG predictability has no security impact here. The delay is further clamped by maxDelay and can be overridden by the server's Retry-After header, so an attacker who predicts the jitter gains nothing.",
+      "evidence": [
+        "internal/agent/openai.go:9",
+        "internal/agent/openai.go:242-249",
+        "internal/agent/openai.go:195-199"
+      ],
+      "codeHash": "sha256:4d4fa9fc30d4f3563f7ce64d466f221cd5eabca46da637630749fef6775bbe34",
+      "model": "kimi-k3",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-25T20:27:29Z",
+      "tokensUsed": 10783
+    },
     "synthetic:4fe6c0467edb31027eebf2f8a41aa92bc3f7efe7b3914df94d5d4739b24b4b8b": {
       "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
       "file": "internal/agent/openai.go",
@@ -11,6 +44,23 @@
       "model": "deepseek-v4-flash",
       "decidedAt": "2026-07-23T23:06:27Z",
       "tokensUsed": 55936
+    },
+    "synthetic:a46b9fb36f28a5d90c3d72434c68c61d0d6f5bad48fc80961b2cee05656d809d": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "exploitable",
+      "reason": "The finding is a true positive: the Dependabot configuration at .github/dependabot.yml defines two update entries (gomod at lines 4-10, github-actions at lines 14-20) and neither contains a `cooldown` block — the word 'cooldown' appears nowhere in the file. Both entries use `groups` with `patterns: [\"*\"]`, so every dependency, including transitives, is bumped to the latest published version on a weekly schedule with no aging window. A newly published malicious or compromised Go module version could therefore be proposed (and grouped into a bulk PR) before the ecosystem has time to detect and yank it. No compensating in-repo control exists: no workflow performs auto-merge or additional gating for Dependabot PRs, but also nothing enforces a delay, so the missing-cooldown defect is real exactly as flagged.",
+      "evidence": [
+        ".github/dependabot.yml:4-10",
+        ".github/dependabot.yml:14-20",
+        ".github/dependabot.yml:1-20"
+      ],
+      "codeHash": "sha256:3f8df0456d21a7ef02dee7f730c763bf1b9110cd10d06d3b6242f5c457509b7e",
+      "model": "kimi-k3",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-25T20:28:01Z",
+      "tokensUsed": 5176
     }
   }
 }
