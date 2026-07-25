@@ -66,6 +66,27 @@ func TestParseFileFixture(t *testing.T) {
 	}
 }
 
+// The scanner that produced the log is attribution the report needs: severity
+// is its number, not a judgement the triage agent made.
+func TestToolName(t *testing.T) {
+	findings, err := ParseFile("../../testdata/findings.sarif")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ToolName(findings); got != "Semgrep OSS" {
+		t.Errorf("ToolName = %q, want the fixture's tool.driver.name", got)
+	}
+	// One log, two runs, two tools: naming one of them would credit the wrong
+	// scanner for half the severities.
+	both := append(append([]Finding{}, findings...), Finding{Scanner: "codeql"})
+	if got := ToolName(both); got != "Semgrep OSS + codeql" {
+		t.Errorf("ToolName = %q, want both tools named once each", got)
+	}
+	if got := ToolName([]Finding{{}}); got != "" {
+		t.Errorf("ToolName = %q, want empty so callers can omit the attribution", got)
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	tests := []struct {
 		name, input, wantErr string

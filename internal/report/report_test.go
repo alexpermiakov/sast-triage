@@ -5,6 +5,11 @@ import (
 	"testing"
 )
 
+// plain strips the zero-width break hints the summary tables put in paths, so
+// an assertion about what a row says can be written the way a reader reads it.
+// The hints themselves are pinned in TestRenderSummary.
+func plain(s string) string { return strings.ReplaceAll(s, zeroWidthSpace, "") }
+
 func sampleItems() []Item {
 	return []Item{
 		{
@@ -177,6 +182,7 @@ func TestRenderDigestTinyCapKeepsHeadline(t *testing.T) {
 func TestRenderSummary(t *testing.T) {
 	out := RenderSummary(sampleItems(), Options{
 		Model:    "deepseek-v4-flash",
+		Scanner:  "opengrep",
 		RunURL:   "https://github.com/o/r/actions/runs/1",
 		RunLabel: "seed",
 		LinkBase: "https://github.com/o/r/blob/abc",
@@ -185,13 +191,17 @@ func TestRenderSummary(t *testing.T) {
 	for _, want := range []string{
 		"### sast-triage · seed",
 		"5 findings — **1 exploitable**",
-		"| verdict | severity | why | rule | location |",
+		// Both judgement columns say whose judgement they are.
+		"| verdict<br><sub>sast-triage</sub> | severity<br><sub>opengrep</sub> | why | rule | location |",
 		"| ❌ exploitable | high |",
 		"| ✅ benign | high |",
 		"| ⚠️ uncertain | medium |",
-		"`security.sqli.string-formatted-query`",
-		"[app/handlers.go:17](https://github.com/o/r/blob/abc/app/handlers.go#L17)",
-		"verdict: sast-triage (deepseek-v4-flash)",
+		// The rule ID stays byte-exact — an operator copies it into a grep.
+		"`string-formatted-query`",
+		// The path carries a break opportunity per separator, and links to the
+		// unpadded path.
+		"[app/" + zeroWidthSpace + "handlers.go:17](https://github.com/o/r/blob/abc/app/handlers.go#L17)",
+		"verdict: sast-triage (deepseek-v4-flash) · severity: opengrep",
 		"[run summary](https://github.com/o/r/actions/runs/1)",
 	} {
 		if !strings.Contains(out, want) {
@@ -270,7 +280,7 @@ func TestRenderSummaryKeepsExploitableUnderAnySeverity(t *testing.T) {
 		})
 	}
 
-	out := RenderSummary(items, Options{})
+	out := plain(RenderSummary(items, Options{}))
 
 	if !strings.Contains(out, "app/redirect.go:4") {
 		t.Errorf("a medium exploitable must survive the severity filter:\n%s", out)
@@ -278,6 +288,68 @@ func TestRenderSummaryKeepsExploitableUnderAnySeverity(t *testing.T) {
 	if i := strings.Index(out, "app/redirect.go:4"); i > strings.Index(out, "app/bulk.go") {
 		t.Errorf("exploitable rows must lead the table:\n%s", out)
 	}
+}
+
+// maxUnbreakableRunes is how wide a single cell may force its column to be.
+// Roughly a rule ID's longest hyphen-free segment; a deep Java path blows past
+// it by a factor of three without help.
+const maxUnbreakableRunes = 32
+
+// The table has to fit the container it renders in. GitHub sizes it at
+// max-content capped to the container and puts a horizontal scrollbar under
+// the overflow, so a cell that cannot wrap does not fold — it makes the whole
+// summary scroll sideways, and squeezes the why column, the one column a
+// reviewer actually reads, into a ribbon.
+//
+// Nothing here can assert pixels, so the invariant is the one thing that
+// causes it: every cell must be able to break somewhere inside each 32 runes.
+func TestSummaryCellsCanWrap(t *testing.T) {
+	items := []Item{{
+		Fingerprint: "fp-deep", RuleID: "java.lang.security.audit.httpservlet-path-traversal",
+		File:      "src/main/java/com/example/vulnerable/VulnerableController.java",
+		StartLine: 91, EndLine: 99, Severity: 8.6, Level: "error",
+		Verdict: "exploitable", Reason: "attacker-controlled header name reaches new java.io.File",
+	}}
+
+	for _, opts := range []Options{{}, {LinkBase: "https://github.com/o/r/blob/abc"}} {
+		for _, row := range strings.Split(RenderSummary(items, opts), "\n") {
+			if !strings.HasPrefix(row, "| ") {
+				continue
+			}
+			for _, c := range strings.Split(row, " | ") {
+				if run := longestUnbreakable(c); run > maxUnbreakableRunes {
+					t.Errorf("cell %q holds a %d-rune run with nowhere to break (max %d); it will widen the table past its container", c, run, maxUnbreakableRunes)
+				}
+			}
+		}
+	}
+}
+
+// longestUnbreakable measures the longest stretch of rendered text a browser
+// cannot break: link targets do not count (they are never displayed), and a
+// space, a hyphen and a zero-width space all end a stretch.
+func longestUnbreakable(cell string) int {
+	for {
+		open := strings.Index(cell, "](")
+		if open < 0 {
+			break
+		}
+		close := strings.Index(cell[open:], ")")
+		if close < 0 {
+			break
+		}
+		cell = cell[:open] + cell[open+close+1:]
+	}
+	longest, run := 0, 0
+	for _, r := range cell {
+		if strings.ContainsRune(" -"+zeroWidthSpace, r) {
+			run = 0
+			continue
+		}
+		run++
+		longest = max(longest, run)
+	}
+	return longest
 }
 
 // Table cells are model prose: a stray pipe silently eats a column, and an
@@ -327,7 +399,7 @@ func TestIssueBody(t *testing.T) {
 // says, in the PR, exactly what this change proposes to dismiss and why.
 func TestSuppressionComment(t *testing.T) {
 	items := sampleItems()
-	got := SuppressionComment(items, Options{}, "abc123", "https://github.com/o/r/pull/7/files#diff-x")
+	got := plain(SuppressionComment(items, Options{}, "abc123", "https://github.com/o/r/pull/7/files#diff-x"))
 
 	// sampleItems has one fresh benign (the short-circuited test file); the
 	// other benign is cached, i.e. approved in an earlier PR.
