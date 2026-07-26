@@ -165,7 +165,7 @@ with:
 The workflows this repo runs on itself are the copy-paste source: [triage-seed.yml](.github/workflows/triage-seed.yml), [triage-pr.yml](.github/workflows/triage-pr.yml).
 
 <details>
-<summary><b>Self-hosted model</b> (Ollama, vLLM, LM Studio) — no API key, no cost, nothing leaves the runner</summary>
+<summary><b>Self-hosted model</b> (Ollama, vLLM, LM Studio) — no API key, no vendor, nothing leaves the runner</summary>
 
 Built for your own on-premise runners: the model sits next to the code and nothing crosses the fence.
 
@@ -242,15 +242,11 @@ sast-triage -provider anthropic -model claude-sonnet-5 \
 
 ## What you get
 
-- ✅ **A gate that only fires on `exploitable`** (`mode: enforce`) — never on `uncertain`, never on the backlog. A gate that fires on noise is a gate that gets disabled in a week, so this one doesn't. Want the strict version? `fail-on: exploitable,uncertain` opts in, and findings your run budget never reached still don't gate
-- ✅ **Every suppression announced in the PR** (`pr-comments: true`) — one comment saying "3 findings suppressed by this change", each with the reason, linked to the cache diff where you can veto it. The tool doesn't hide what it dismissed; it writes it into your diff
-- ✅ **Classes you can forbid it from auto-dismissing** — `no-suppress-cwe: "CWE-501,CWE-327"` and a `benign` on those becomes `uncertain` and stays visible. Empty by default: the tool ships no opinion about what your repo can afford to auto-suppress. Keyed on CWE so it survives a scanner swap, and a typo fails the run rather than silently matching nothing. Measured starting point below if you want one
-- ✅ **Filtered SARIF on every run** (`triaged.sarif`, on by default) — benign findings are relabelled via `suppressions[]`, never deleted. Upload it to the Security tab with `github/codeql-action/upload-sarif`, or hand it to DefectDojo
-- ✅ **Inline PR comments** (`pr-comments: true`) — the verdict, the reasoning, and the cited evidence land on the diff line, where the review already is
-- ✅ **`triage-report.md`** — every verdict with its reasoning and clickable `file:line` evidence, exploitable findings first so the answer to "is anything on fire?" is the top of the page, then the proposed suppressions. Complete and uncapped; keep it with `actions/upload-artifact`
-- ✅ **Human-approved verdicts** — the run updates `.sast-triage/cache.json`; it reaches `main` through a normal PR merge, so every suppression is a readable diff nobody can skip
-- ✅ **GitHub issues for confirmed vulnerabilities** (opt-in `create-issues:`) — one per finding, deduped across runs, with the evidence in the body
-- ✅ **Any SARIF 2.1.0 scanner** — Semgrep, CodeQL, Snyk Code, gosec, Bandit, …
+- ✅ **Nothing leaves your runner** — bring your own model, including a local one (`base-url: http://localhost:11434/v1`). The flagged code is read by a model you host, not shipped to a vendor cloud
+- ✅ **Any SARIF 2.1.0 scanner, one pass** — CodeQL + gosec + Snyk Code triaged together, by one set of rules. Not one vendor's findings only
+- ✅ **Verdicts as git history, not a dashboard** — each suppression lands in `.sast-triage/cache.json` as a readable diff carrying its cited `file:line` evidence, and takes effect only once a human merges it
+- ✅ **A gate that only fires on `exploitable`** (`mode: enforce`) — never on `uncertain`, never on the backlog. A gate that fires on noise gets disabled in a week; `fail-on: exploitable,uncertain` opts into the strict version
+- ✅ **It shows its work where the review already is** — inline PR comments on the diff line, a comment naming every suppression the change made, `triaged.sarif` for the Security tab, `triage-report.md` for the record
 
 ## Reference
 
@@ -268,8 +264,6 @@ Everything below has a working default — the quick starts above set `model`, `
 | Local Ollama      | $0          | $0                   |
 
 Only the first run costs anything. Every finding after that is a cache hit until the code it cites changes, so re-running the same 2,376 findings is ~$0 and a PR that adds one new finding costs one finding.
-
-Against a commercial SAST-triage tier, which runs four to five figures a year for a team
 
 </details>
 
@@ -393,12 +387,12 @@ Three independent layers have to fail at once:
 <details>
 <summary><strong>Why not Semgrep Assistant or GitHub Code Security's AI triage?</strong></summary>
 
-Same job, different constraints. Those are good products if you're already paying for the tier that includes them. This exists for everyone else:
+Same job, different constraints — and price is not one of them. Semgrep Assistant is free under 10 developers and GitHub's AI triage ships with Code Security; if you're one team on one scanner and your code can go to a vendor cloud, use theirs. Reach for this when:
 
-- $0 per developer — MIT licence, runs as a step in the CI you already have
-- bring your own model, including a local one — code never has to leave your runner
-- verdicts live in your repo as a reviewable git history, not in a vendor dashboard
-- consumes any SARIF scanner's output, not one vendor's
+- **your code can't leave the building.** Assistant, Snyk and Copilot Autofix all send the flagged code to a vendor cloud to triage it. Here the model is whatever you point `base-url` at — a local Ollama or vLLM on your own runner — so the code and the verdict stay inside your perimeter. This is the reason to pick it in a regulated or on-prem shop
+- **you run more than one scanner.** Assistant triages Semgrep findings; GitHub's triages CodeQL. Neither will look at the other's. This reads any SARIF 2.1.0, so CodeQL + gosec + Snyk Code get one consistent verdict pass and one report
+- **you have to show an auditor.** Every suppression is a commit in your repo with the model's reasoning and cited `file:line` evidence, human-approved before it takes effect, and auto-expired when a cited line changes — not a dashboard you can't diff or export
+- **you're past the free tier.** At 50 developers, per-seat AI triage is a real line item; this is MIT and runs as a step in the CI you already have
 
 </details>
 
