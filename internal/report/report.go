@@ -544,6 +544,13 @@ func bucketList(items []Item) string {
 // the word beside it on purpose: it survives being skimmed, and it is what
 // makes a wall of green rows with one red one readable at a glance.
 //
+// The glyphs say what the reader must do, never how well the tool did. ❌ is
+// reserved for this tool being wrong, and an exploitable verdict is the tool
+// working — the alarm belongs on the finding, so 🚨 marks it. A ❌ there reads
+// as a failed check on a correct catch, and it leaves nothing to mark an actual
+// mistake with. ⚠️ on uncertain is the third state and not a lesser ❌: the tool
+// declined to decide, which is a handoff, not an error.
+//
 // The space between them is non-breaking, which is the one place in the table
 // that buys width rather than saving it. A glyph wrapped onto its own line is
 // not a skimmable marker any more — it is a stray icon above a word — and the
@@ -552,7 +559,7 @@ func bucketList(items []Item) string {
 func verdictCell(verdict string) string {
 	switch verdict {
 	case "exploitable":
-		return "❌&nbsp;exploitable"
+		return "🚨&nbsp;exploitable"
 	case "benign":
 		return "✅&nbsp;benign"
 	default:

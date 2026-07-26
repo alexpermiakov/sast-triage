@@ -563,7 +563,7 @@ func TestRunWritesSummary(t *testing.T) {
 	for _, want := range []string{
 		"### sast-triage · seed",
 		"**1 exploitable**",
-		"❌&nbsp;exploitable",
+		"🚨&nbsp;exploitable",
 		cfg.Model,
 		cfg.RunURL,
 		// The scanner behind the severity column, read out of the fixture's

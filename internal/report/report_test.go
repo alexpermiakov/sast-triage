@@ -204,7 +204,7 @@ func TestRenderSummary(t *testing.T) {
 		"Delete the whole entry. The next run triages it from scratch.",
 		// Both judgement columns say whose judgement they are.
 		"| Verdict<br><sub>by&nbsp;sast-triage</sub> | Severity<br><sub>by&nbsp;opengrep</sub> | Why | Rule | Location |",
-		"| ❌&nbsp;exploitable | high |",
+		"| 🚨&nbsp;exploitable | high |",
 		"| ✅&nbsp;benign | high |",
 		"| ⚠️&nbsp;uncertain | medium |",
 		// The rule ID stays byte-exact — an operator copies it into a grep.
@@ -220,7 +220,7 @@ func TestRenderSummary(t *testing.T) {
 	}
 	// Class beats severity: the 8.6 uncertain-free ordering puts every benign
 	// row above the uncertain one even though one uncertain outranks nothing.
-	if strings.Index(out, "❌&nbsp;exploitable") > strings.Index(out, "✅&nbsp;benign") {
+	if strings.Index(out, "🚨&nbsp;exploitable") > strings.Index(out, "✅&nbsp;benign") {
 		t.Error("exploitable rows must lead the table")
 	}
 	if strings.Index(out, "✅&nbsp;benign") > strings.Index(out, "⚠️&nbsp;uncertain") {
@@ -235,6 +235,33 @@ func TestRenderSummary(t *testing.T) {
 	// diff; the body would be unbounded with them.
 	if strings.Contains(out, "app/handlers.go:16") {
 		t.Errorf("summary must not carry evidence lists:\n%s", out)
+	}
+}
+
+// ❌ is reserved for this tool being wrong, and nothing it renders is a claim
+// about its own correctness — an exploitable verdict is the tool working, so it
+// gets the alarm glyph, not a failure mark. Pinned across every surface because
+// the glyph set is what a reader skims, and a cross means "this check failed"
+// wherever it lands.
+func TestNoFailureGlyphOnCorrectVerdicts(t *testing.T) {
+	items := sampleItems()
+	opts := Options{Model: "deepseek-v4-flash", Scanner: "opengrep", LinkBase: "https://github.com/o/r/blob/abc"}
+
+	for name, out := range map[string]string{
+		"report":    Render(items, opts),
+		"digest":    RenderDigest(items, opts, 8000),
+		"summary":   RenderSummary(items, opts),
+		"issue":     IssueBody(items[0], opts),
+		"suppress":  SuppressionComment(items, opts, "abc", ""),
+		"pr-review": ReviewCommentBody(items[0], opts),
+	} {
+		if strings.Contains(out, "❌") {
+			t.Errorf("%s renders ❌, which marks a mistake by this tool:\n%s", name, out)
+		}
+	}
+
+	if got := verdictCell("exploitable"); !strings.HasPrefix(got, "🚨") {
+		t.Errorf("exploitable must lead with the alarm glyph, got %q", got)
 	}
 }
 
@@ -265,7 +292,7 @@ func TestRenderSummaryBoundsRows(t *testing.T) {
 		t.Errorf("medium rows must collapse once over the cap:\n%s", out)
 	}
 	// The exploitable finding sorts first, so no cap can drop it.
-	if !strings.Contains(out, "❌&nbsp;exploitable") {
+	if !strings.Contains(out, "🚨&nbsp;exploitable") {
 		t.Errorf("exploitable row was collapsed away:\n%s", out)
 	}
 	if len(out) > 4000 {
