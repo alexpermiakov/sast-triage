@@ -54,7 +54,7 @@ jobs:
 
       # Your scanner goes here — Semgrep, CodeQL, Opengrep, Snyk Code, anything emitting SARIF 2.1.0
       - name: Scan → findings.sarif
-        run: |1
+        run: |
           pipx install semgrep
           semgrep scan --sarif-output=findings.sarif
 
@@ -307,12 +307,14 @@ The action also takes `api-key` (routed to whichever provider you selected), plu
 
 </details>
 
+<a name="measured-classes"></a>
+
 <details>
 <summary><b>Classes to consider never auto-suppressing</b> — a measured starting point for <code>no-suppress-cwe</code></summary>
 
 Nothing is barred by default. The tool has no way to know whether your repo is an internal batch job or a public payments API, so it doesn't pick for you — but here is the measurement, and you can copy it.
 
-Triaged against [BenchmarkJava](https://github.com/OWASP-Benchmark/BenchmarkJava), the agent produces **zero silent suppressions** on injection, path traversal, weak randomness and the crypto classes. Those it reasons about correctly, because the evidence is a data flow it can follow from source to sink.
+Triaged against [BenchmarkJava](https://github.com/OWASP-Benchmark/BenchmarkJava), the agent produces **zero false `benign` verdicts on every class except the four below** — SQL injection, XSS, path traversal and weak randomness included. Those it reasons about correctly, because the evidence is a data flow it can follow from source to sink.
 
 It is unreliable where exploitability turns on a trust boundary or a configuration convention that isn't visible in the code it can read:
 
@@ -368,6 +370,8 @@ Changing the list costs nothing: it is applied when a verdict is read, so adding
      "<scanner> emitted N findings on <repo>; X benign / Y exploitable / Z uncertain,
      $C total. We hand-checked M of the benign verdicts: K correct, and here are the
      ones it got wrong." The hand-verified benign sample is the number that matters. -->
+
+Measured, not asserted: [Classes to consider never auto-suppressing](#measured-classes) has the per-class false `benign` counts on BenchmarkJava — zero on every class but four, and those four named with their counts.
 
 Accuracy is deliberately asymmetric. The dangerous mistake — suppressing a real vulnerability — has to clear three bars: cited `file:line` evidence the tool re-verifies, a human merging the cache review PR, and a codeHash that expires the verdict the moment any cited line changes. The cheap mistake — `uncertain` on something a human could resolve — costs a retry, not a missed vuln. A weaker model shifts verdicts toward `uncertain`, never toward silent `benign`.
 
