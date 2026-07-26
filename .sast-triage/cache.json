@@ -1,6 +1,39 @@
 {
   "version": 1,
   "entries": {
+    "synthetic:0fbbae0429f6dd5bd67ce72d371093a45f540f2bccce1cbb1d0d44f471fa4ac9": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "exploitable",
+      "reason": "The defect is real as flagged: the repository's Dependabot configuration contains two update entries (gomod at lines 4-10 and github-actions at lines 14-20), and neither contains a `cooldown` block — the entire file (lines 1-20) has no `cooldown` or `default-days` key. This means Dependabot will open PRs for newly published dependency versions immediately upon release, with no delay window during which malicious or broken releases could be pulled/detected, which is exactly the supply-chain hardening gap the rule describes (CWE-829). This is a configuration weakness rather than a taint-flow issue, so no sanitizer exists to check; the absence of the mitigation is confirmed directly.",
+      "evidence": [
+        ".github/dependabot.yml:14-20",
+        ".github/dependabot.yml:1-10"
+      ],
+      "codeHash": "sha256:4647a3638147b31bfa763b7e7440313919eb126df15add0c721e235596904bae",
+      "model": "kimi-k3",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-26T20:29:17Z",
+      "tokensUsed": 2945
+    },
+    "synthetic:4d37171025e51f08cf8758203b01fc40473041647fe3ed6e9e8767c9b90b40f1": {
+      "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
+      "file": "internal/agent/openai.go",
+      "verdict": "benign",
+      "reason": "The flagged math/rand/v2 import has exactly one use in the repo: internal/agent/openai.go:248, where rand.Int64N generates jitter for the HTTP retry backoff delay (half + random fraction of the clamped exponential delay) inside OpenAIClient.backoff. This is a timing-decorrelation value for retry scheduling after 429/5xx responses, not a security-sensitive value — it is not used for tokens, keys, IDs, nonces, or any secret, and an attacker who could predict the jitter gains nothing beyond slightly forecasting when the tool itself retries its own LLM endpoint. No attacker-controlled input reaches the sink (the only input is the attempt counter), so CWE-338 does not apply in this context.",
+      "evidence": [
+        "internal/agent/openai.go:9",
+        "internal/agent/openai.go:239-249",
+        "internal/agent/openai.go:195-198"
+      ],
+      "codeHash": "sha256:8f4abeb3b270782477f6cea2e4fbc578a546090f7831474af1ffbcef812ff3c8",
+      "model": "kimi-k3",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-26T20:29:26Z",
+      "tokensUsed": 16893
+    },
     "synthetic:4fe6c0467edb31027eebf2f8a41aa92bc3f7efe7b3914df94d5d4739b24b4b8b": {
       "ruleId": "go.lang.security.audit.crypto.math_random.math-random-used",
       "file": "internal/agent/openai.go",
@@ -11,6 +44,22 @@
       "model": "deepseek-v4-flash",
       "decidedAt": "2026-07-23T23:06:27Z",
       "tokensUsed": 55936
+    },
+    "synthetic:a46b9fb36f28a5d90c3d72434c68c61d0d6f5bad48fc80961b2cee05656d809d": {
+      "ruleId": "package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown",
+      "file": ".github/dependabot.yml",
+      "verdict": "benign",
+      "reason": "The finding is factually accurate that no `cooldown` block exists (the entire dependabot.yml, lines 1-20, contains only package-ecosystem, directory, schedule, and groups keys), but this is a defense-in-depth hardening gap, not an exploitable defect in this codebase. Dependabot's only capability is opening pull requests proposing dependency bumps; the configuration contains no merge or execution authority. A repo-wide search for auto-merge configuration (automerge/auto-merge) returned no matches, so every proposed update — cooldown or not — requires human review and CI before it can affect the repository. There is no attacker-controlled input reaching any sink in the repo; the 'risk' is a hypothetical future maintainer merging a freshly published malicious version, which a missing cooldown does not itself enable.",
+      "evidence": [
+        ".github/dependabot.yml:1-10",
+        ".github/dependabot.yml:11-20"
+      ],
+      "codeHash": "sha256:62844a2fd5770a0afb3ab33a9940d12a7663659c878d79c408c57e2982fd77b1",
+      "model": "kimi-k3",
+      "effort": "medium",
+      "agentVersion": 1,
+      "decidedAt": "2026-07-26T20:29:47Z",
+      "tokensUsed": 5140
     }
   }
 }
