@@ -3,8 +3,8 @@ module github.com/alexpermiakov/sast-triage
 go 1.26.0
 
 require (
-	github.com/anthropics/anthropic-sdk-go v1.61.0
-	golang.org/x/sync v0.22.0
+	github.com/anthropics/anthropic-sdk-go v1.71.0
+	golang.org/x/sync v0.23.0
 )
 
 require (
